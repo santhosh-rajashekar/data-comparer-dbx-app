@@ -1,45 +1,26 @@
-# Ignore Flax project files
-Binaries/
-Cache/
-Logs/
-Output/
-Screenshots/
-*.HotReload.*
+# Databricks bundle
+.databricks/
+.bundle/
 
-# Ignore Visual Studio project files (generated locally)
-*.csproj
-*.sln
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
 
-# Ignore thumbnails created by Windows
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
 Thumbs.db
 
-# Ignore files built by Visual Studio
-*.obj
-*.exe
-*.pdb
-*.user
-*.aps
-*.pch
-*.vspscc
-*_i.c
-*_p.c
-*.ncb
-*.suo
-*.tlb
-*.tlh
-*.bak
-*.cache
-*.ilk
-*.log
-[Bb]in
-[Dd]ebug*/
-*.lib
-*.sbr
-obj/
-[Rr]elease*/
-_ReSharper*/
-[Tt]est[Rr]esult*
-.vs/
-
-# Ignore Nuget packages folder
-packages/
+# Session cache
+.rdm_session_cache.json

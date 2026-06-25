@@ -1,0 +1,48 @@
+# ============================================================
+# RDM 3-Way Diff — Databricks App Bundle
+# Reference & Master Data Quality Assurance Tool
+# ============================================================
+
+bundle:
+  name: data-comparer-dbx-app
+
+variables:
+  serving_endpoint:
+    description: "Foundation Model API endpoint for RDM Agent"
+    default: "databricks-claude-sonnet-4-5"
+  flask_secret:
+    description: "Flask session secret key"
+    default: "rdm-app-secret-change-in-prod"
+
+include:
+  - resources/*.yml
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://adb-7405616457611961.1.azuredatabricks.net
+
+  test:
+    workspace:
+      host: https://adb-7405616457611961.1.azuredatabricks.net
+    variables:
+      flask_secret: "rdm-app-secret-test"
+
+  prp:
+    workspace:
+      host: https://adb-7405616457611961.1.azuredatabricks.net
+    variables:
+      flask_secret: "rdm-app-secret-prp"
+
+  prd:
+    mode: production
+    workspace:
+      host: https://adb-7405616457611961.1.azuredatabricks.net
+    variables:
+      serving_endpoint: "databricks-claude-sonnet-4-5"
+      flask_secret: "rdm-app-secret-prd"
+    permissions:
+      - service_principal_name: sp-data-comparer-prd
+        level: CAN_MANAGE

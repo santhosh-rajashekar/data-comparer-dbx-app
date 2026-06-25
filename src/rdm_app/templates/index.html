@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>RDM 3-Way Diff — Databricks App</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/rdm.css') }}">
+</head>
+<body>
+
+<!-- Header -->
+<header>
+  <svg class="logo" viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+  <div class="hd"></div>
+  <div>
+    <h1>RDM 3-Way Diff</h1>
+    <p>Reference & Master Data Quality Assurance — Databricks App</p>
+  </div>
+  <button class="ai-cfg-btn connected" onclick="toggleRDM()" id="rdmBtn">&#129302; RDM Agent</button>
+</header>
+
+<!-- Main Canvas -->
+<div class="canvas">
+
+<!-- Tab bar -->
+<div class="tab-bar" id="tabBar">
+  <button class="tab-btn active enabled" id="tab-btn-1" onclick="showTab(1)">
+    <div class="tab-num">1</div><span>Upload Files</span>
+  </button>
+  <button class="tab-btn" id="tab-btn-2" onclick="showTab(2)">
+    <div class="tab-num">2</div><span>Review Mapping</span>
+  </button>
+  <button class="tab-btn" id="tab-btn-3" onclick="showTab(3)">
+    <div class="tab-num">3</div><span>Compare</span>
+  </button>
+</div>
+
+<!-- TAB 1: Upload -->
+<div class="tab-panel active" id="tab-panel-1">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">&#128196; Upload Files</span>
+      <div class="mode-toggle" id="modeToggle">
+        <button class="mode-btn" id="modeBtn-SKA" onclick="setMode('SKA')">SKA — Chart of Accounts</button>
+        <button class="mode-btn mode-btn-active" id="modeBtn-SKB" onclick="setMode('SKB')">SKB — Company Code Level</button>
+      </div>
+    </div>
+    <div class="upload-grid">
+      <div class="upload-zone" id="drop-COA" ondrop="handleDrop(event,'COA')" ondragover="event.preventDefault()">
+        <div class="upload-icon">&#128203;</div>
+        <div class="upload-label">COA Master Sheet</div>
+        <div class="upload-hint">Drag & drop or click to upload</div>
+        <input type="file" accept=".xlsx,.xls,.xlsb,.csv" onchange="handleFile(this,'COA')" hidden>
+      </div>
+      <div class="upload-zone" id="drop-FAQ" ondrop="handleDrop(event,'FAQ')" ondragover="event.preventDefault()">
+        <div class="upload-icon">&#128194;</div>
+        <div class="upload-label">FAQ (SAP)</div>
+        <div class="upload-hint">Drag & drop or click to upload</div>
+        <input type="file" accept=".xlsx,.xls,.xlsb,.csv" onchange="handleFile(this,'FAQ')" hidden>
+      </div>
+      <div class="upload-zone" id="drop-DataPool" ondrop="handleDrop(event,'DataPool')" ondragover="event.preventDefault()">
+        <div class="upload-icon">&#128190;</div>
+        <div class="upload-label">DataPool</div>
+        <div class="upload-hint">Drag & drop or click to upload</div>
+        <input type="file" accept=".xlsx,.xls,.xlsb,.csv" onchange="handleFile(this,'DataPool')" hidden>
+      </div>
+    </div>
+    <div class="card-footer">
+      <button class="btn btn-primary" onclick="goToMapping()" id="btnMapping" disabled>Next: Review Mapping →</button>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 2: Mapping -->
+<div class="tab-panel" id="tab-panel-2">
+  <div class="card">
+    <div class="card-header">
+      <span class="card-title">&#128269; Column Mapping</span>
+      <span class="card-meta" id="mapMeta"></span>
+    </div>
+
+    <!-- Key Column Selection -->
+    <div class="options-section" id="keySection">
+      <div class="options-title">&#128273; Key Columns (used to match rows across sources)</div>
+      <div class="options-grid" id="keySelects"></div>
+    </div>
+
+    <!-- Mapping Table -->
+    <div id="mappingTable"></div>
+
+    <!-- Comparison Options -->
+    <div class="options-section">
+      <div class="options-title">&#9881; Comparison Options</div>
+      <div class="options-grid">
+        <label class="opt-label"><input type="checkbox" id="optTrim" checked> Trim whitespace <span class="opt-hint">ignore leading/trailing spaces</span></label>
+        <label class="opt-label"><input type="checkbox" id="optCaseInsensitive" checked> Case-insensitive <span class="opt-hint">ignore case differences</span></label>
+        <label class="opt-label"><input type="checkbox" id="optSkipYellow" checked> Skip yellow COA rows <span class="opt-hint">exclude hierarchy/group rows highlighted yellow</span></label>
+        <label class="opt-label"><input type="checkbox" id="optSkipTenDigit" checked> Skip non-10-digit accounts <span class="opt-hint">compare 10-digit accounts only</span></label>
+        <label class="opt-label"><input type="checkbox" id="optSkipStrike" checked> Skip strikethrough rows <span class="opt-hint">exclude rows struck out in COA</span></label>
+      </div>
+    </div>
+
+    <!-- Active Sources -->
+    <div class="options-section">
+      <div class="options-title">&#128203; Active Sources</div>
+      <div class="options-grid">
+        <label class="opt-label src-coa"><input type="checkbox" id="srcCOA" checked> COA Side</label>
+        <label class="opt-label src-faq"><input type="checkbox" id="srcFAQ" checked> FAQ (SAP)</label>
+        <label class="opt-label src-dp"><input type="checkbox" id="srcDP" checked> DataPool</label>
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <button class="btn btn-secondary" onclick="showTab(1)">← Back</button>
+      <button class="btn btn-primary" onclick="runCompare()" id="btnCompare">Run Comparison →</button>
+    </div>
+  </div>
+</div>
+
+<!-- TAB 3: Compare -->
+<div class="tab-panel" id="tab-panel-3">
+  <div class="card" style="margin-bottom:0;">
+    <!-- Sub-tab bar -->
+    <div class="subtab-bar">
+      <button class="subtab-btn" id="subtab-settings" onclick="showSubTab('settings')">&#9654; Settings</button>
+      <button class="subtab-btn" id="subtab-transforms" onclick="showSubTab('transforms')">&#9889; Transforms <span class="subtab-badge" id="txBadge"></span></button>
+      <button class="subtab-btn active" id="subtab-results" onclick="showSubTab('results')">&#128202; Results <span class="subtab-badge green" id="resultsBadge"></span></button>
+      <div style="margin-left:auto;display:flex;align-items:center;gap:8px;">
+        <button class="btn btn-secondary btn-sm" onclick="showTab(2)">← Mapping</button>
+      </div>
+    </div>
+
+    <!-- Sub-tab: Settings -->
+    <div class="subtab-panel" id="panel-settings" style="display:none;">
+      <div style="padding:16px 20px;color:var(--text3);font-size:12px;">Settings are configured in the Review Mapping tab. Go back to adjust comparison options.</div>
+    </div>
+
+    <!-- Sub-tab: Transforms -->
+    <div class="subtab-panel" id="panel-transforms" style="display:none;">
+      <div style="padding:10px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">
+        <span style="font-size:13px;font-weight:600;color:var(--text);">&#9889; Active Transforms</span>
+        <span class="subtab-badge" id="txCountBadge"></span>
+        <span style="font-size:10px;color:#10b981;font-weight:500;margin-left:6px;">&#128190; Preset</span>
+      </div>
+      <div id="transformsTable" style="padding:0;"></div>
+    </div>
+
+    <!-- Sub-tab: Results -->
+    <div class="subtab-panel" id="panel-results">
+      <!-- Summary bar -->
+      <div class="summary-bar" id="summaryBar"></div>
+
+      <!-- Diff title + controls -->
+      <div class="diff-header">
+        <span class="diff-title" id="diffTitle">No comparison yet</span>
+        <div class="diff-controls">
+          <button class="btn btn-primary btn-sm" onclick="runCompare()">&#9654; Re-run</button>
+          <button class="btn btn-secondary btn-sm" onclick="clearResults()">&#8635; Clear</button>
+          <div class="dropdown" id="exportDropdown">
+            <button class="btn btn-secondary btn-sm" onclick="toggleExportMenu()">&#8615; Export &#9662;</button>
+            <div class="dropdown-menu" id="exportMenu">
+              <a onclick="exportData('excel_all')">&#128202; Export Excel (all rows)</a>
+              <a onclick="exportData('excel_conflicts')">&#9888; Export Excel (conflicts only)</a>
+              <a onclick="exportData('csv_all')">&#128196; Export CSV (all rows)</a>
+            </div>
+          </div>
+          <button class="btn btn-secondary btn-sm" onclick="toggleFullscreen()">&#9635; Fullscreen</button>
+        </div>
+      </div>
+
+      <!-- Filter bar -->
+      <div class="filter-bar">
+        <div class="filter-group">
+          <button class="filter-btn active" onclick="applyFilter('all')" id="fAll">All rows</button>
+          <button class="filter-btn" onclick="applyFilter('conflict')" id="fConflict">&#9888; Conflicts</button>
+          <button class="filter-btn" onclick="applyFilter('onlyCOA')" id="fOnlyCOA">COA only</button>
+          <button class="filter-btn" onclick="applyFilter('onlyFAQ')" id="fOnlyFAQ">FAQ only</button>
+          <button class="filter-btn" onclick="applyFilter('onlyDP')" id="fOnlyDP">DataPool only</button>
+          <button class="filter-btn" onclick="applyFilter('same')" id="fSame">&#10003; Identical</button>
+        </div>
+        <div class="filter-group">
+          <span class="src-legend"><span class="legend-dot coa"></span> COA Side</span>
+          <span class="src-legend"><span class="legend-dot faq"></span> FAQ (SAP)</span>
+          <span class="src-legend"><span class="legend-dot dp"></span> DataPool</span>
+        </div>
+        <div class="filter-group">
+          <input type="text" class="search-input" id="rowSearch" placeholder="Search rows by key or value" oninput="onRowSearch(this.value)">
+          <span class="col-info" id="colInfo"></span>
+        </div>
+      </div>
+
+      <!-- Results table -->
+      <div id="diffTable"></div>
+
+      <!-- Pagination -->
+      <div class="pagination" id="pagination"></div>
+    </div>
+  </div>
+</div>
+
+</div><!-- /canvas -->
+
+<!-- RDM Agent Chat Panel -->
+<div class="rdm-panel" id="rdmPanel">
+  <div class="rdm-header">
+    <span>&#129302; RDM Agent</span>
+    <span class="rdm-badge">Databricks AI</span>
+    <button class="rdm-close-btn" onclick="toggleRDM()">✕</button>
+  </div>
+  <div class="rdm-body" id="rdmBody">
+    <div class="rdm-welcome" id="rdmWelcome">
+      <div class="rdm-welcome-icon">&#129302;</div>
+      <h4>RDM Agent</h4>
+      <p>Ask me about your comparison results, data quality issues, or request SQL queries.</p>
+      <div class="rdm-quick-prompts" id="rdmWelcomeChips">
+        <button class="rdm-qp" onclick="rdmQuickAsk('What data sources are loaded?')">&#128194; What's loaded?</button>
+        <button class="rdm-qp" onclick="rdmQuickAsk('How to get started')">&#128640; Get started</button>
+        <button class="rdm-qp" onclick="rdmQuickAsk('Explain the field mapping')">&#128506; Field mapping</button>
+      </div>
+    </div>
+  </div>
+  <div class="rdm-foot">
+    <div class="rdm-input-row">
+      <textarea class="rdm-input" id="rdmInput" placeholder="Ask about your data..." rows="1"
+        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendRDM();}"></textarea>
+      <button class="rdm-send-btn" id="rdmSendBtn" onclick="sendRDM()">Send</button>
+    </div>
+  </div>
+</div>
+
+<!-- Transform Panel (Modal) -->
+<div class="tx-panel-overlay hidden" id="txPanelOverlay" onclick="closeTxPanel()">
+  <div class="tx-panel" onclick="event.stopPropagation()">
+    <div class="tx-panel-header">
+      <div>
+        <div class="tx-panel-title" id="txPanelTitle">Transform: Field</div>
+        <div class="tx-panel-sub" id="txPanelSub">Enter an instruction and Preview to generate</div>
+      </div>
+      <button class="tx-panel-close" onclick="closeTxPanel()">&times;</button>
+    </div>
+
+    <div class="tx-panel-body">
+      <!-- Source selector -->
+      <div class="tx-section">
+        <div class="tx-label">APPLY TRANSFORM TO</div>
+        <div class="tx-src-btns" id="txSrcBtns">
+          <button class="tx-src-btn" onclick="setTxSource('COA')">COA</button>
+          <button class="tx-src-btn active" onclick="setTxSource('FAQ')">FAQ</button>
+          <button class="tx-src-btn" onclick="setTxSource('DataPool')">DataPool</button>
+          <button class="tx-src-btn" onclick="setTxSource('All')">All Sources</button>
+        </div>
+      </div>
+
+      <!-- Instruction -->
+      <div class="tx-section">
+        <div class="tx-label">INSTRUCTION</div>
+        <textarea class="tx-instruction" id="txInstruction" placeholder="e.g., extract only digits and characters before first space"></textarea>
+      </div>
+
+      <!-- Quick action pills -->
+      <div class="tx-pills">
+        <button class="tx-pill" onclick="setTxPill('Remove leading zeros')">Remove leading zeros</button>
+        <button class="tx-pill" onclick="setTxPill('Uppercase')">Uppercase</button>
+        <button class="tx-pill" onclick="setTxPill('Trim whitespace')">Trim whitespace</button>
+        <button class="tx-pill" onclick="setTxPill('Extract digits only')">Extract digits only</button>
+        <button class="tx-pill" onclick="setTxPill('Remove special chars')">Remove special chars</button>
+        <button class="tx-pill" onclick="setTxPill('Lowercase')">Lowercase</button>
+        <button class="tx-pill" onclick="setTxPill('Extract before first space')">Extract before space</button>
+      </div>
+
+      <!-- Sample values preview -->
+      <div class="tx-section">
+        <div class="tx-label">SAMPLE VALUES <span style="font-weight:400;color:var(--text3);">(first 10 unique from selected source)</span></div>
+        <div class="tx-samples" id="txSamples">
+          <p style="color:var(--text3);font-size:11px;padding:12px;">Click Preview to see transformed values</p>
+        </div>
+      </div>
+
+      <!-- Generated function -->
+      <div class="tx-function" id="txFunction" style="display:none;"></div>
+    </div>
+
+    <!-- Footer buttons -->
+    <div class="tx-panel-footer">
+      <button class="btn btn-secondary btn-sm" onclick="previewTransform()">&#9654; Preview</button>
+      <button class="btn btn-primary btn-sm" onclick="applyTransform()">&#10003; Apply</button>
+      <button class="btn btn-secondary btn-sm" onclick="clearTransform()">&#8596; Clear</button>
+    </div>
+  </div>
+</div>
+
+<!-- File upload progress overlay -->
+<div class="file-load-overlay hidden" id="fileLoadOverlay">
+  <div class="file-load-box">
+    <div class="file-load-src" id="fileLoadSrc"></div>
+    <div class="file-load-spinner"></div>
+    <div class="file-load-title" id="fileLoadTitle">Uploading file&hellip;</div>
+    <div class="file-load-sub" id="fileLoadSub"></div>
+    <div class="file-load-progress">
+      <div class="file-load-bar" id="fileLoadBar"></div>
+    </div>
+    <div class="file-load-hint" id="fileLoadHint"></div>
+  </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/rdm-ui.js') }}"></script>
+<script src="{{ url_for('static', filename='js/rdm-chat.js') }}"></script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+command:
+  - 'python'
+  - 'app.py'
+
+env:
+  - name: SERVING_ENDPOINT
+    description: "Databricks Foundation Model API endpoint for RDM Agent chat"
+    value: "databricks-claude-sonnet-4-5"
+  - name: UPLOAD_VOLUME_PATH
+    description: "UC Volume path for uploaded source files"
+    value: "/Volumes/data_mesh_hub/rdm/uploads"
+  - name: FLASK_SECRET_KEY
+    description: "Secret key for Flask session management"
+    value: "rdm-app-secret-change-in-prod"

@@ -12,3 +12,18 @@ env:
   - name: FLASK_SECRET_KEY
     description: "Secret key for Flask session management"
     value: "rdm-app-secret-change-in-prod"
+  - name: JIRA_BASE_URL
+    description: "JIRA Cloud base URL (e.g. https://your-org.atlassian.net)"
+    value: ""
+  - name: JIRA_PROJECT_KEY
+    description: "JIRA project key for RDM conflict stories (e.g. RDM)"
+    value: ""
+  - name: JIRA_USER_EMAIL
+    description: "JIRA user email for API auth"
+    value: ""
+  - name: JIRA_API_TOKEN
+    description: "JIRA API token (generate from id.atlassian.com)"
+    value: ""
+  - name: APP_BASE_URL
+    description: "This app's public URL (for back-links in JIRA stories)"
+    value: "https://rdm-3way-diff-dev-7405616457611961.1.azure.databricksapps.com"

@@ -110,6 +110,7 @@ function uploadFile(source, file) {
           zone.querySelector('.upload-hint').textContent = data.row_count + ' rows \u00b7 ' + data.headers.length + ' columns';
           uploadedSources[source] = data;
           cacheSessionData(); // Auto-save to IndexedDB for quick restore
+          if (typeof refreshWelcomeChips === 'function') refreshWelcomeChips();
           checkReady();
         }
       } catch (e) {
@@ -276,6 +277,7 @@ async function runCompare() {
       comparableFields = data.comparable_fields || [];
       currentFilter = 'all';
       currentPage = 0;
+      if (typeof refreshWelcomeChips === 'function') refreshWelcomeChips();
       renderSummary(data.summary);
       renderTransforms(data.active_transforms || []);
       renderFilteredTable();
@@ -335,6 +337,29 @@ function onRowSearch(val) {
   renderFilteredTable();
 }
 
+function filterByKey(key) {
+  // Called from agent chat when user clicks a key link
+  // 1. Set the search term to the key value
+  var searchInput = document.getElementById('rowSearch');
+  if (searchInput) searchInput.value = key;
+  searchTerm = key.toLowerCase().trim();
+  currentPage = 0;
+
+  // 2. Reset filter to show all row types (so the key is visible regardless of type)
+  currentFilter = 'all';
+  document.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+  var allBtn = document.getElementById('fAll');
+  if (allBtn) allBtn.classList.add('active');
+
+  // 3. Switch to results sub-tab and render
+  showSubTab('results');
+  renderFilteredTable();
+
+  // 4. Scroll to the results area
+  var diffTable = document.getElementById('diffTable');
+  if (diffTable) diffTable.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 function getFilteredRows() {
   var rows = allDiffRows;
   if (currentFilter !== 'all') {
@@ -365,11 +390,13 @@ function getFilteredRows() {
   return rows;
 }
 
-function renderFilteredTable() {
+function renderFilteredTable(keepPage) {
   var rows = getFilteredRows();
   // Progressive loading: show up to (currentPage+1)*pageSize rows
-  currentPage = 0;
-  displayedRows = Math.min(pageSize, rows.length);
+  if (!keepPage) {
+    currentPage = 0;
+  }
+  displayedRows = Math.min((currentPage + 1) * pageSize, rows.length);
   renderDiffTable(rows.slice(0, displayedRows));
   renderPagination(rows.length);
   // Update diff title and column info
@@ -511,12 +538,7 @@ function renderPagination(totalRows) {
 
 function loadMoreRows() {
   currentPage++;
-  var rows = getFilteredRows();
-  var start = 0;
-  var end = (currentPage + 1) * pageSize;
-  displayedRows = Math.min(end, rows.length);
-  renderDiffTable(rows.slice(0, displayedRows));
-  renderPagination(rows.length);
+  renderFilteredTable(true); // keep current page
 }
 
 // ==================== Export ====================

@@ -30,7 +30,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_field_stats",
-            "description": "Get per-field conflict statistics: how many conflicts each field has, sorted by most conflicts. Call this when user asks which fields differ most or about data quality.",
+            "description": "Get per-field conflict statistics: how many conflicts each field has, sorted by most conflicts first. Call this when user asks which fields differ most.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -38,7 +38,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "query_diff_results",
-            "description": "Execute a SQL query against the diff_results SQLite table. Use for specific questions needing data lookups. Always include LIMIT clause (max 50).",
+            "description": "Execute a SQL query against the diff_results SQLite table. Use for specific questions needing data lookups. Always LIMIT 50.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -55,17 +55,17 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_sample_conflicts",
-            "description": "Get sample rows where a specific field has conflicts. Shows COA, FAQ, DataPool values side by side for comparison.",
+            "description": "Get sample rows where a specific field has conflicts. Shows COA, FAQ, DataPool values side by side.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "field": {
                         "type": "string",
-                        "description": "Canonical field name (e.g. 'gl_account_long_text', 'indicator_blocked_for_posting').",
+                        "description": "Canonical field name (e.g. 'gl_account_long_text').",
                     },
                     "limit": {
                         "type": "integer",
-                        "description": "Number of samples to return (default 10, max 30).",
+                        "description": "Number of samples (default 10, max 30).",
                     },
                 },
                 "required": ["field"],
@@ -76,7 +76,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_active_transforms",
-            "description": "Get list of active data transforms (normalization rules) applied to fields before comparison.",
+            "description": "Get list of active transforms (normalization rules) applied to fields.",
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -84,8 +84,25 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_comparison_summary",
-            "description": "Get overall comparison summary: total rows, matches, conflicts, per-source only counts, match percentage. Call this for overview questions.",
+            "description": "Get overall comparison summary: total rows, matches, conflicts, per-source counts, match percentage.",
             "parameters": {"type": "object", "properties": {}, "required": []},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_jira_story",
+            "description": "Create a JIRA story for a data conflict. Use when user asks to create a ticket, log a JIRA issue, or raise a story for a conflict. Provide the field name and optionally specific keys.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "field": {"type": "string", "description": "The field name with conflicts (e.g. 'GL Account Long Text')"},
+                    "priority": {"type": "string", "enum": ["Critical", "High", "Medium", "Low"], "description": "Story priority based on conflict severity"},
+                    "keys": {"type": "string", "description": "Comma-separated specific keys to include, or 'all' for all conflicts in this field"},
+                    "additional_context": {"type": "string", "description": "Any extra context to include in the story description"},
+                },
+                "required": ["field"],
+            },
         },
     },
 ]
@@ -123,34 +140,62 @@ class LLMService:
         lines = [
             "You are RDM Agent, an expert Reference & Master Data analyst embedded in a 3-way reconciliation tool "
             "comparing COA Master Sheet, FAQ (SAP), and DataPool.",
+            "You have full context of the loaded data and comparison results. Be specific, concise, and actionable.",
+            "Format responses with clear sections using **bold** headers where helpful. Use bullet points for lists.",
             "",
-            "## Your Capabilities",
-            "You have TOOLS to query the data directly. USE THEM instead of guessing:",
-            "- `get_loaded_sources` — see what files are loaded",
-            "- `get_comparison_summary` — overall match/conflict stats",
-            "- `get_field_stats` — per-field conflict counts (which fields differ most)",
-            "- `query_diff_results` — run SQL on the diff table for specific lookups",
-            "- `get_sample_conflicts` — see actual differing values for a field",
-            "- `get_active_transforms` — see what normalization rules are applied",
-            "",
-            "## Rules",
-            "- ALWAYS call tools to get real data before answering data questions.",
-            "- Do NOT guess or make up numbers. If you need data, call a tool.",
-            "- Be specific, concise, and actionable. Use **bold** for headers, bullets for lists.",
-            "- Format tables using markdown | col | syntax when showing tabular results.",
-            "",
-            "## Follow-up Suggestions",
-            "After your FINAL answer, include exactly 3 follow-up suggestions:",
-            "```suggestions",
-            '["short question 1", "short question 2", "short question 3"]',
-            "```",
+            "## Current Session Context",
         ]
 
-        # Include column schema so query_diff_results tool calls use correct names
+        # Source files
+        sources = context.get("sources", {})
+        for src in ["COA", "FAQ", "DataPool"]:
+            info = sources.get(src, {})
+            filename = info.get("filename", "not loaded")
+            lines.append(f"**{src} file:** {filename}")
+
+        # Mapping info
         mapping = context.get("mapping")
         if mapping:
             fields = mapping.get("comparable_fields", [])
             if fields:
+                labels = [f.get("label", f.get("canonical", "")) for f in fields]
+                lines.append(f"")
+                lines.append(f"**Fields compared ({len(fields)}):** {', '.join(labels)}")
+
+        # Diff results
+        diff = context.get("diff_results")
+        if diff and diff.get("total", 0) > 0:
+            total = diff["total"]
+            same = diff.get("same", 0)
+            match_pct = f"{(same / total * 100):.1f}" if total > 0 else "0.0"
+            lines.extend([
+                "",
+                "**Comparison results:**",
+                f"  - Total rows: {total:,}",
+                f"  - Matching (all sources agree): {same:,} ({match_pct}%)",
+                f"  - Conflicts (same key, values differ): {diff.get('conflict', 0):,}",
+                f"  - COA-only rows: {diff.get('onlyCOA', 0):,}",
+                f"  - FAQ-only rows: {diff.get('onlyFAQ', 0):,}",
+                f"  - DataPool-only rows: {diff.get('onlyDP', 0):,}",
+            ])
+        else:
+            lines.extend(["", "**Comparison results:** No comparison has been run yet."])
+
+        # SQL instructions with ACTUAL column names
+        lines.extend([
+            "",
+            "## SQL Instructions",
+            "A diff_results table is available. When a question needs specific rows or values, "
+            "include a ```sql fenced block — it will be executed automatically.",
+            "Always LIMIT 50. Column names use FULL canonical names (not abbreviations).",
+            "dtype values: 'conflict', 'same', 'only_COA', 'only_FAQ', 'only_DataPool'.",
+        ])
+
+        # Include actual column names so the LLM doesn't guess
+        if mapping:
+            fields = mapping.get("comparable_fields", [])
+            if fields:
+                import re
                 def safe_col(s):
                     name = re.sub(r"[^a-z0-9_]", "_", s.lower().strip())
                     name = re.sub(r"_+", "_", name).strip("_")
@@ -158,17 +203,37 @@ class LLMService:
                         name = "f_" + name
                     return name or "field"
 
+                col_list = ["dtype TEXT", "key TEXT"]
+                for f in fields:
+                    cn = safe_col(f.get("canonical", ""))
+                    col_list.append(f'coa_{cn} TEXT, faq_{cn} TEXT, dp_{cn} TEXT, conflict_{cn} INTEGER')
                 lines.append("")
-                lines.append("## diff_results SQL Schema (for query_diff_results tool)")
-                lines.append("Columns: dtype TEXT, key TEXT, " + ", ".join(
-                    f"coa_{safe_col(f['canonical'])} TEXT, faq_{safe_col(f['canonical'])} TEXT, dp_{safe_col(f['canonical'])} TEXT, conflict_{safe_col(f['canonical'])} INT"
-                    for f in fields
-                ))
+                lines.append("**Exact table schema (use these column names exactly):**")
+                lines.append("```")
+                lines.append(", ".join(col_list))
+                lines.append("```")
                 lines.append("")
-                lines.append("Field label mapping: " + ", ".join(
-                    f"{safe_col(f['canonical'])}=\'{f.get('label', f['canonical'])}\'"
-                    for f in fields
-                ))
+                lines.append("IMPORTANT: Use the FULL canonical field names above. For example:")
+                sample_cn = safe_col(fields[0].get("canonical", "")) if fields else "field_name"
+                lines.append(f"  - To count conflicts on first field: SELECT SUM(conflict_{sample_cn}) FROM diff_results")
+                lines.append(f"  - To find conflicting rows: SELECT * FROM diff_results WHERE conflict_{sample_cn} = 1 LIMIT 10")
+
+        lines.extend([
+            "",
+            "## JIRA Integration",
+            "You have a `create_jira_story` tool. When the user asks to create a JIRA ticket/story for a conflict:",
+            "1. First gather the conflict details using get_field_stats or get_sample_conflicts",
+            "2. Present a summary preview: field, conflict count, priority suggestion, and sample values",
+            "3. Ask the user to confirm before calling create_jira_story",
+            "4. If JIRA returns success, display the story key and URL as a link",
+            "5. If JIRA is not configured, tell the user which env vars to set",
+            "Auto-suggest priority: >30% conflicts = High, >10% = Medium, else Low",
+            "",
+            "## Follow-up Suggestions",
+            "After your answer, include a JSON block with 3 suggested follow-up questions.",
+            "Format: ```suggestions\n[\"question 1\", \"question 2\", \"question 3\"]\n```",
+            "Suggestions must be short (under 40 chars), actionable, and relevant to what was just discussed.",
+        ])
 
         return "\n".join(lines)
 
@@ -177,101 +242,43 @@ class LLMService:
         user_message: str,
         history: list,
         context: dict,
-        tool_executor: Callable = None,
     ) -> dict:
-        """Run the agent loop: call LLM with tools, execute tool calls, repeat until final answer.
+        """Send a chat message to the Databricks Foundation Model API.
 
         Args:
             user_message: The user's latest message.
             history: Conversation history [{role, content}, ...].
             context: Session context (sources, mapping, diff_results).
-            tool_executor: Callable(tool_name, arguments) -> str that executes tools.
 
         Returns:
-            dict with 'reply' (text) and optionally 'sql' (extracted SQL), 'tool_calls_made' (list).
+            dict with 'reply' (text) and optionally 'sql' (extracted SQL block).
         """
         system_prompt = self._build_system_prompt(context)
 
         # Build messages array: system + history (last 8 turns) + new message
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(history[-8:])
+        messages.extend(history[-8:])  # Keep last 8 conversation turns
         messages.append({"role": "user", "content": user_message})
 
-        tool_calls_made = []
-        tools_to_use = AGENT_TOOLS if tool_executor else None
+        # Call Databricks Foundation Model API via SDK's API client
+        # (handles auth automatically — works in Databricks Apps)
+        data = self._call_endpoint(messages, max_tokens=2000, temperature=0.2)
 
-        # Agent loop: call LLM → if tool_calls → execute → feed back → repeat
-        for round_num in range(self.MAX_TOOL_ROUNDS):
-            data = self._call_endpoint(messages, max_tokens=2000, temperature=0.2, tools=tools_to_use)
+        reply = ""
+        if isinstance(data, dict):
+            choices = data.get("choices", [])
+            if choices:
+                reply = choices[0].get("message", {}).get("content", "")
+        elif hasattr(data, "choices") and data.choices:
+            reply = data.choices[0].message.content
 
-            # Extract the response message
-            choice = {}
-            if isinstance(data, dict):
-                choices = data.get("choices", [])
-                if choices:
-                    choice = choices[0]
-            elif hasattr(data, "choices") and data.choices:
-                choice = {"message": {"role": "assistant", "content": data.choices[0].message.content}}
-
-            message = choice.get("message", {})
-            finish_reason = choice.get("finish_reason", "stop")
-
-            # Check if LLM wants to call tools
-            tool_calls = message.get("tool_calls", [])
-
-            if tool_calls and tool_executor:
-                # Append the assistant message with tool_calls to conversation
-                messages.append(message)
-
-                # Execute each tool call and add results
-                for tc in tool_calls:
-                    func = tc.get("function", {})
-                    tool_name = func.get("name", "")
-                    try:
-                        arguments = json.loads(func.get("arguments", "{}"))
-                    except json.JSONDecodeError:
-                        arguments = {}
-
-                    logger.info(f"Agent tool call [{round_num+1}]: {tool_name}({arguments})")
-
-                    # Execute the tool
-                    try:
-                        result = tool_executor(tool_name, arguments)
-                    except Exception as e:
-                        result = json.dumps({"error": str(e)})
-
-                    tool_calls_made.append({"tool": tool_name, "args": arguments})
-
-                    # Add tool result to conversation
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id", ""),
-                        "content": result if isinstance(result, str) else json.dumps(result),
-                    })
-
-                # Continue loop — LLM will see tool results and respond
-                continue
-
-            else:
-                # No tool calls — this is the final answer
-                reply = message.get("content") or ""
-                break
-        else:
-            # Exhausted max rounds, get whatever we have
-            reply = (message.get("content") or "") if message else "I was unable to complete the analysis within the allowed steps."
-
-        # Ensure reply is always a string (content can be null in tool-call responses)
-        if not isinstance(reply, str):
-            reply = ""
-
-        # Extract SQL block if present (for backward compat)
+        # Extract SQL block if present
         sql_match = re.search(r"```sql\s*([\s\S]*?)```", reply, re.IGNORECASE)
         sql = sql_match.group(1).strip() if sql_match else None
 
         return {
             "reply": reply,
             "sql": sql,
-            "tool_calls_made": tool_calls_made,
         }
 
     def generate_transform(
@@ -280,30 +287,34 @@ class LLMService:
         field: str,
         samples: list,
     ) -> dict:
-        """Generate a Python transform function for field normalization."""
+        """Generate a Python transform function for field normalization.
+
+        Replaces the JS function generation in the original app.
+        """
         prompt = (
-            f"Generate a Python lambda or one-liner function that implements: "
+            f"Generate a Python function called `transform(value: str) -> str` that implements: "
             f"{instruction}\n\n"
             f"Field: {field}\n"
             f"Sample values: {json.dumps(samples[:10])}\n\n"
-            f"Return ONLY a single lambda expression like: lambda v: v.upper()\n"
-            f"Handle None/empty values gracefully. No explanation, just the lambda."
+            f"Return ONLY the function definition, no explanation. "
+            f"The function must handle None/empty values gracefully."
         )
 
         messages = [
-            {"role": "system", "content": "You are a Python code generator. Return only a lambda expression, no explanation."},
+            {"role": "system", "content": "You are a Python code generator. Return only valid Python code, no explanation."},
             {"role": "user", "content": prompt},
         ]
 
+        # Call via SDK's API client (handles auth automatically)
         data = self._call_endpoint(messages, max_tokens=500, temperature=0.0)
 
         reply = ""
         if isinstance(data, dict):
             choices = data.get("choices", [])
             if choices:
-                reply = choices[0].get("message", {}).get("content") or ""
+                reply = choices[0].get("message", {}).get("content", "")
         elif hasattr(data, "choices") and data.choices:
-            reply = data.choices[0].message.content or ""
+            reply = data.choices[0].message.content
 
         # Extract function from code block
         code_match = re.search(r"```python\s*([\s\S]*?)```", reply)

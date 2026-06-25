@@ -21,6 +21,7 @@ try:
     from services.llm_service import LLMService
     from services.diff_service import DiffService
     from services.file_service import FileService
+    from services.jira_service import JiraService
     logger.info("All services imported successfully")
 except Exception as e:
     logger.error(f"Failed to import services: {e}", exc_info=True)
@@ -65,6 +66,7 @@ diff_service = DiffService()
 file_service = FileService(
     volume_path=os.environ.get("UPLOAD_VOLUME_PATH", "/Volumes/data_mesh_hub/rdm/uploads")
 )
+jira_service = JiraService()
 
 
 @app.route("/")
@@ -266,6 +268,70 @@ def _execute_agent_tool(tool_name: str, arguments: dict, store: dict) -> str:
             "custom_transforms": list(custom.keys()),
             "disabled_predefined": disabled,
         })
+
+    elif tool_name == "create_jira_story":
+        field = arguments.get("field", "")
+        priority = arguments.get("priority", "Medium")
+        keys_arg = arguments.get("keys", "all")
+        additional_context = arguments.get("additional_context", "")
+
+        if not field:
+            return json.dumps({"error": "Field name is required"})
+
+        # Check JIRA configuration
+        if not jira_service.configured:
+            return json.dumps({"error": "JIRA not configured. Set JIRA_BASE_URL, JIRA_PROJECT_KEY, JIRA_USER_EMAIL, JIRA_API_TOKEN in app environment.", "jira_status": jira_service.get_status()})
+
+        # Gather conflict data for this field
+        cn = safe_col(field)
+        try:
+            # Get conflict count
+            count_sql = f"SELECT COUNT(*) FROM diff_results WHERE conflict_{cn} = 1"
+            count_result = diff_service.execute_sql(count_sql)
+            conflict_count = count_result.get("rows", [[0]])[0][0] if not count_result.get("error") else 0
+
+            total_sql = "SELECT COUNT(*) FROM diff_results"
+            total_result = diff_service.execute_sql(total_sql)
+            total_records = total_result.get("rows", [[0]])[0][0] if not total_result.get("error") else 0
+
+            # Get sample conflicts for JIRA description
+            sample_sql = f"SELECT key, coa_{cn}, faq_{cn}, dp_{cn} FROM diff_results WHERE conflict_{cn} = 1 LIMIT 10"
+            sample_result = diff_service.execute_sql(sample_sql)
+            sample_rows = []
+            for row in sample_result.get("rows", []):
+                sample_rows.append({"key": row[0], "COA": row[1], "FAQ": row[2], "DataPool": row[3]})
+
+            # Get all conflict rows for CSV attachment (or filtered by keys)
+            if keys_arg and keys_arg != "all":
+                key_list = [k.strip() for k in keys_arg.split(",")]
+                placeholders = ",".join([f"'{k}'" for k in key_list])
+                all_sql = f"SELECT key, coa_{cn}, faq_{cn}, dp_{cn} FROM diff_results WHERE conflict_{cn} = 1 AND key IN ({placeholders})"
+            else:
+                all_sql = f"SELECT key, coa_{cn}, faq_{cn}, dp_{cn} FROM diff_results WHERE conflict_{cn} = 1"
+            all_result = diff_service.execute_sql(all_sql)
+            all_rows = [{"key": r[0], "COA": r[1], "FAQ": r[2], "DataPool": r[3]} for r in all_result.get("rows", [])]
+
+            # Determine sources present
+            sources = []
+            for src in ["COA", "FAQ", "DataPool"]:
+                if store.get("sources", {}).get(src):
+                    sources.append(src)
+
+            # Create JIRA story
+            result = jira_service.create_conflict_story(
+                field=field,
+                conflict_count=conflict_count,
+                total_records=total_records,
+                sample_rows=sample_rows,
+                all_conflict_rows=all_rows,
+                sources=sources,
+                priority=priority,
+                additional_context=additional_context,
+            )
+
+            return json.dumps(result)
+        except Exception as e:
+            return json.dumps({"error": f"Failed to create JIRA story: {str(e)}"})
 
     else:
         return json.dumps({"error": f"Unknown tool: {tool_name}"})
@@ -648,6 +714,22 @@ def _apply_transform_code(func_code: str, value: str) -> str:
         return str(result) if result is not None else ""
     except Exception:
         return value
+
+
+# =============================================================================
+# JIRA Integration
+# =============================================================================
+
+@app.route("/api/jira/status", methods=["GET"])
+def jira_status():
+    """Check JIRA configuration status."""
+    return jsonify(jira_service.get_status())
+
+
+@app.route("/api/jira/test", methods=["POST"])
+def jira_test():
+    """Test JIRA connectivity."""
+    return jsonify(jira_service.test_connection())
 
 
 # =============================================================================

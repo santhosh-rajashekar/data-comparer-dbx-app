@@ -13,6 +13,7 @@ function toggleRDM() {
   document.getElementById('rdmPanel').classList.toggle('open', rdmOpen);
   const btn = document.getElementById('rdmBtn');
   if (btn) btn.classList.toggle('active', rdmOpen);
+  if (rdmOpen) renderWelcomeChips(); // Refresh chips on open
 }
 
 function rdmQuickAsk(prompt) {
@@ -70,55 +71,77 @@ function removeTyping() {
 }
 
 function formatReply(text) {
-  // First, extract and convert markdown tables to HTML
+  // Step 1: Extract markdown tables into placeholders (before HTML escaping)
+  var tables = [];
   text = text.replace(/(?:^|\n)(\|[^\n]+\|\n\|[\s:\-|]+\|\n(?:\|[^\n]+\|(?:\n|$))+)/gm, function(match) {
     var lines = match.trim().split('\n');
     if (lines.length < 3) return match;
-    // Parse header
     var headers = lines[0].split('|').filter(function(c) { return c.trim() !== ''; });
-    // Skip separator line (lines[1])
-    // Parse rows
+    // Detect alignment from separator
+    var aligns = lines[1].split('|').filter(function(c) { return c.trim() !== ''; }).map(function(sep) {
+      sep = sep.trim();
+      if (sep.startsWith(':') && sep.endsWith(':')) return 'center';
+      if (sep.endsWith(':')) return 'right';
+      return 'left';
+    });
     var rows = [];
     for (var i = 2; i < lines.length; i++) {
       var cells = lines[i].split('|').filter(function(c) { return c.trim() !== ''; });
       if (cells.length > 0) rows.push(cells);
     }
-    // Build HTML table
-    var html = '<table class="rdm-reply-table"><thead><tr>';
-    headers.forEach(function(h) { html += '<th>' + h.trim() + '</th>'; });
+    // Build styled HTML table
+    var html = '<div class="rdm-table-wrap"><table class="rdm-reply-table"><thead><tr>';
+    headers.forEach(function(h, idx) {
+      var align = aligns[idx] || 'left';
+      html += '<th style="text-align:' + align + '">' + h.trim().replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>') + '</th>';
+    });
     html += '</tr></thead><tbody>';
-    rows.forEach(function(row) {
+    rows.forEach(function(row, ri) {
       html += '<tr>';
-      row.forEach(function(cell) { html += '<td>' + cell.trim() + '</td>'; });
+      row.forEach(function(cell, ci) {
+        var align = aligns[ci] || 'left';
+        var val = cell.trim().replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>').replace(/`([^`]+)`/g, '<code>$1</code>');
+        // Make key values in first column clickable (6-10 digit numbers)
+        if (ci === 0 && /^\d{6,10}$/.test(val)) {
+          val = '<a class="rdm-key-link" href="#" onclick="filterByKey(\'' + val + '\');return false;" title="Show in results">' + val + '</a>';
+        }
+        html += '<td style="text-align:' + align + '">' + val + '</td>';
+      });
       html += '</tr>';
     });
-    html += '</tbody></table>';
-    return '\n' + html + '\n';
+    html += '</tbody></table></div>';
+    var placeholder = '\x00TABLE_' + tables.length + '\x00';
+    tables.push(html);
+    return '\n' + placeholder + '\n';
   });
 
-  // Then format the rest of markdown
-  return text
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    // Restore HTML tables that were escaped
-    .replace(/&lt;table class=&quot;rdm-reply-table&quot;&gt;/g, '<table class="rdm-reply-table">')
-    .replace(/&lt;\/table&gt;/g, '</table>')
-    .replace(/&lt;thead&gt;/g, '<thead>').replace(/&lt;\/thead&gt;/g, '</thead>')
-    .replace(/&lt;tbody&gt;/g, '<tbody>').replace(/&lt;\/tbody&gt;/g, '</tbody>')
-    .replace(/&lt;tr&gt;/g, '<tr>').replace(/&lt;\/tr&gt;/g, '</tr>')
-    .replace(/&lt;th&gt;/g, '<th>').replace(/&lt;\/th&gt;/g, '</th>')
-    .replace(/&lt;td&gt;/g, '<td>').replace(/&lt;\/td&gt;/g, '</td>')
-    // Headings
+  // Step 2: HTML-escape the remaining text
+  text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Step 3: Apply markdown formatting
+  text = text
     .replace(/^### (.+)$/gm, '<div class="rdm-h3">$1</div>')
     .replace(/^## (.+)$/gm, '<div class="rdm-h2">$1</div>')
     .replace(/^# (.+)$/gm, '<div class="rdm-h1">$1</div>')
-    // Horizontal rules
     .replace(/^---$/gm, '<hr class="rdm-hr">')
-    // Bold, code, bullets
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
     .replace(/^[\-\*\u2022] (.+)$/gm, '<div class="rdm-li">\u2022 $1</div>')
     .replace(/\n{2,}/g, '<br><br>')
     .replace(/\n/g, '<br>');
+
+  // Step 4: Re-insert tables in place of placeholders
+  tables.forEach(function(tableHtml, idx) {
+    text = text.replace('\x00TABLE_' + idx + '\x00', tableHtml);
+  });
+
+  // Step 5: Make key references clickable (filter results when clicked)
+  // Match patterns like key values in backticks or quoted numbers (e.g. `0001234567`, "0001234567")
+  text = text.replace(/(?:<code>)(\d{6,10})(?:<\/code>)/g, function(match, key) {
+    return '<a class="rdm-key-link" href="#" onclick="filterByKey(\'' + key + '\');return false;" title="Filter results for key ' + key + '">' + key + '</a>';
+  });
+
+  return text;
 }
 
 function renderSQLResult(result) {
@@ -149,6 +172,7 @@ async function sendRDM() {
   rdmAppendMsg('user', text);
   input.value = '';
   _rdmHistory.push({ role: 'user', content: text });
+  trackQuestion(text); // Adaptive learning
 
   rdmAppendTyping();
   _rdmBusy = true;
@@ -201,6 +225,135 @@ function escHtml(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+// ==================== Smart Welcome Chips & Adaptive Suggestions ====================
+
+// Question categories for adaptive learning
+var _questionPatterns = {
+  overview: { keywords: ['summary', 'overview', 'stats', 'loaded', 'status'], count: 0, label: 'overview' },
+  conflicts: { keywords: ['conflict', 'differ', 'mismatch', 'disagree', 'wrong'], count: 0, label: 'conflicts' },
+  fields: { keywords: ['field', 'column', 'attribute', 'which field'], count: 0, label: 'field analysis' },
+  samples: { keywords: ['sample', 'example', 'show me', 'values', 'look like'], count: 0, label: 'samples' },
+  transforms: { keywords: ['transform', 'normalize', 'fix', 'rule', 'clean'], count: 0, label: 'transforms' },
+  export: { keywords: ['export', 'download', 'excel', 'csv'], count: 0, label: 'export' },
+  quality: { keywords: ['quality', 'rate', 'percent', 'coverage', 'completeness'], count: 0, label: 'data quality' },
+};
+
+// Load saved patterns from localStorage
+function loadQuestionPatterns() {
+  try {
+    var saved = localStorage.getItem('rdm_question_patterns');
+    if (saved) {
+      var parsed = JSON.parse(saved);
+      for (var cat in parsed) {
+        if (_questionPatterns[cat]) _questionPatterns[cat].count = parsed[cat];
+      }
+    }
+  } catch (e) {}
+}
+
+// Track a user question
+function trackQuestion(text) {
+  var q = text.toLowerCase();
+  for (var cat in _questionPatterns) {
+    var p = _questionPatterns[cat];
+    for (var i = 0; i < p.keywords.length; i++) {
+      if (q.indexOf(p.keywords[i]) >= 0) {
+        p.count++;
+        break;
+      }
+    }
+  }
+  // Save to localStorage
+  var counts = {};
+  for (var c in _questionPatterns) counts[c] = _questionPatterns[c].count;
+  try { localStorage.setItem('rdm_question_patterns', JSON.stringify(counts)); } catch (e) {}
+}
+
+// Get session state for context-aware chips
+function getSessionState() {
+  var hasSources = uploadedSources && Object.keys(uploadedSources).length > 0;
+  var hasMapping = !!currentMapping;
+  var hasResults = allDiffRows && allDiffRows.length > 0;
+  return { hasSources: hasSources, hasMapping: hasMapping, hasResults: hasResults };
+}
+
+// Render contextual welcome chips based on session state
+function renderWelcomeChips() {
+  var el = document.getElementById('rdmWelcomeChips');
+  if (!el) return;
+
+  var state = getSessionState();
+  var chips = [];
+
+  if (!state.hasSources) {
+    // No data loaded yet
+    chips = [
+      { icon: '\uD83D\uDE80', text: 'How to get started', prompt: 'How do I get started with a 3-way comparison?' },
+      { icon: '\uD83D\uDCC2', text: 'What files do I need?', prompt: 'What file formats and sources do I need to upload?' },
+      { icon: '\u2699\uFE0F', text: 'What can you do?', prompt: 'What are your capabilities as RDM Agent?' },
+    ];
+  } else if (!state.hasResults) {
+    // Files loaded but no comparison yet
+    chips = [
+      { icon: '\uD83D\uDCC4', text: "What's loaded?", prompt: 'What data sources are loaded?' },
+      { icon: '\uD83D\uDD04', text: 'Run comparison', prompt: 'How do I run a comparison?' },
+      { icon: '\uD83D\uDDFA\uFE0F', text: 'Explain field mapping', prompt: 'Explain how fields are mapped across sources' },
+    ];
+  } else {
+    // Comparison results available — show smart suggestions
+    chips = getAdaptiveChips();
+  }
+
+  var html = '';
+  chips.forEach(function(c) {
+    html += '<button class="rdm-qp" onclick="rdmQuickAsk(\'' + c.prompt.replace(/'/g, "\\'") + '\')">' + c.icon + ' ' + c.text + '</button>';
+  });
+  el.innerHTML = html;
+}
+
+// Generate adaptive chips based on what user asks most + session state
+function getAdaptiveChips() {
+  var state = getSessionState();
+  
+  // Base suggestions for post-comparison state
+  var allChips = [
+    { icon: '\u26A0\uFE0F', text: 'Top conflicts', prompt: 'Which fields have the most conflicts?', category: 'conflicts', priority: 10 },
+    { icon: '\uD83D\uDCCA', text: 'Match rate', prompt: 'What is the overall match rate?', category: 'quality', priority: 9 },
+    { icon: '\uD83D\uDD0D', text: 'Show sample conflicts', prompt: 'Show me sample conflicts for the most problematic field', category: 'samples', priority: 8 },
+    { icon: '\uD83D\uDCC8', text: 'Field breakdown', prompt: 'Give me a breakdown of conflicts by field', category: 'fields', priority: 7 },
+    { icon: '\u2728', text: 'Suggest transforms', prompt: 'Which fields could benefit from normalization transforms?', category: 'transforms', priority: 6 },
+    { icon: '\uD83D\uDCE5', text: 'Export results', prompt: 'How do I export the conflict results?', category: 'export', priority: 5 },
+    { icon: '\uD83D\uDCA1', text: 'Insights', prompt: 'What are the key insights from this comparison?', category: 'overview', priority: 7 },
+    { icon: '\uD83C\uDFAF', text: 'Root cause', prompt: 'What might be causing the most common conflicts?', category: 'conflicts', priority: 6 },
+  ];
+
+  // Boost priority based on user's question history
+  allChips.forEach(function(chip) {
+    var cat = _questionPatterns[chip.category];
+    if (cat) {
+      // Reduce priority for categories already asked about (avoid repetition)
+      chip.priority -= Math.min(cat.count * 2, 6);
+      // But boost categories the user frequently explores
+      if (cat.count >= 3) chip.priority += 1; // They clearly care about this
+    }
+  });
+
+  // Sort by priority and take top 4
+  allChips.sort(function(a, b) { return b.priority - a.priority; });
+  return allChips.slice(0, 4);
+}
+
+// Refresh welcome chips when session state changes
+function refreshWelcomeChips() {
+  var welcome = document.getElementById('rdmWelcome');
+  if (welcome && welcome.style.display !== 'none') {
+    renderWelcomeChips();
+  }
+}
+
+// Initialize on load
+loadQuestionPatterns();
+
 // ==================== Follow-up Suggestions ====================
 
 function rdmAppendSuggestions(suggestions) {
@@ -218,22 +371,40 @@ function rdmAppendSuggestions(suggestions) {
 
 function generateSuggestions(lastQuestion) {
   var q = lastQuestion.toLowerCase();
-  // Context-aware suggestions based on what was asked
+  // Context-aware suggestions based on what was asked + adaptive boosting
+  var suggestions = [];
+
   if (q.indexOf('loaded') >= 0 || q.indexOf('source') >= 0 || q.indexOf('file') >= 0) {
-    return ['Show mapping summary', 'Run comparison', 'Which fields are mapped?'];
+    suggestions = ['Show mapping summary', 'Run comparison', 'Which fields are mapped?'];
+  } else if (q.indexOf('conflict') >= 0 || q.indexOf('differ') >= 0 || q.indexOf('mismatch') >= 0) {
+    suggestions = ['Show sample conflicts', 'Suggest transforms to fix', 'Export conflicts to Excel'];
+  } else if (q.indexOf('match') >= 0 || q.indexOf('same') >= 0 || q.indexOf('agree') >= 0) {
+    suggestions = ['What is the overall match rate?', 'Which fields always match?', 'Show conflict breakdown'];
+  } else if (q.indexOf('transform') >= 0 || q.indexOf('normalize') >= 0) {
+    suggestions = ['Show active transforms', 'Which fields need transforms?', 'Re-run comparison'];
+  } else if (q.indexOf('export') >= 0 || q.indexOf('download') >= 0) {
+    suggestions = ['Export all rows', 'Export conflicts only', 'Show summary stats'];
+  } else if (q.indexOf('field') >= 0 || q.indexOf('column') >= 0) {
+    suggestions = ['Show sample values', 'Which fields conflict most?', 'Suggest normalization'];
+  } else {
+    // Use adaptive: suggest from least-explored categories
+    var cats = Object.keys(_questionPatterns).map(function(k) {
+      return { cat: k, count: _questionPatterns[k].count };
+    }).sort(function(a, b) { return a.count - b.count; });
+
+    var prompts = {
+      overview: 'Give me a summary overview',
+      conflicts: 'Which fields have most conflicts?',
+      fields: 'Break down conflicts by field',
+      samples: 'Show sample conflict values',
+      transforms: 'Suggest transforms to reduce conflicts',
+      export: 'Export results to Excel',
+      quality: 'What is the data quality score?',
+    };
+    for (var i = 0; i < Math.min(3, cats.length); i++) {
+      if (prompts[cats[i].cat]) suggestions.push(prompts[cats[i].cat]);
+    }
   }
-  if (q.indexOf('conflict') >= 0 || q.indexOf('differ') >= 0 || q.indexOf('mismatch') >= 0) {
-    return ['Which fields have most conflicts?', 'Show sample conflicts', 'Export conflicts to Excel'];
-  }
-  if (q.indexOf('match') >= 0 || q.indexOf('same') >= 0 || q.indexOf('agree') >= 0) {
-    return ['What is the overall match rate?', 'Which fields always match?', 'Show only conflicts'];
-  }
-  if (q.indexOf('transform') >= 0 || q.indexOf('normalize') >= 0) {
-    return ['Show active transforms', 'Which fields need transforms?', 'Reset all transforms'];
-  }
-  if (q.indexOf('export') >= 0 || q.indexOf('download') >= 0) {
-    return ['Export all rows', 'Export conflicts only', 'Show summary stats'];
-  }
-  // Default follow-ups
-  return ['Show top conflicts', 'What is the match rate?', 'Which fields differ most?'];
+
+  return suggestions.slice(0, 3);
 }

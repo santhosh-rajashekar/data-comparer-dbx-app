@@ -13,6 +13,12 @@ variables:
   flask_secret:
     description: "Flask session secret key"
     default: "rdm-app-secret-change-in-prod"
+  rdm_access_group:
+    description: "AAD group (synced via SCIM) whose members can access the app"
+    default: "rdm-tool-users"
+  deploy_sp:
+    description: "Service principal used for bundle deployment"
+    default: "sp-data-comparer-deploy"
 
 include:
   - resources/*.yml
@@ -23,6 +29,10 @@ targets:
     default: true
     workspace:
       host: https://adb-7405616457611961.1.azuredatabricks.net
+    variables:
+      flask_secret: "rdm-app-secret-dev"
+      # In dev, the same group applies; override here if needed
+      # rdm_access_group: "rdm-tool-users-dev"
 
   test:
     workspace:
@@ -44,5 +54,5 @@ targets:
       serving_endpoint: "databricks-claude-sonnet-4-5"
       flask_secret: "rdm-app-secret-prd"
     permissions:
-      - service_principal_name: sp-data-comparer-prd
+      - service_principal_name: ${var.deploy_sp}
         level: CAN_MANAGE

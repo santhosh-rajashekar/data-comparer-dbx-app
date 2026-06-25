@@ -242,35 +242,97 @@ class LLMService:
         user_message: str,
         history: list,
         context: dict,
+        tool_executor: Optional[Callable] = None,
     ) -> dict:
-        """Send a chat message to the Databricks Foundation Model API.
+        """Send a chat message using a tool-calling agent loop.
 
         Args:
             user_message: The user's latest message.
             history: Conversation history [{role, content}, ...].
             context: Session context (sources, mapping, diff_results).
+            tool_executor: Callable(tool_name, arguments) -> str JSON result.
+                           If provided, the agent can call tools iteratively.
 
         Returns:
-            dict with 'reply' (text) and optionally 'sql' (extracted SQL block).
+            dict with 'reply', optional 'sql', and 'tool_calls_made' count.
         """
         system_prompt = self._build_system_prompt(context)
 
-        # Build messages array: system + history (last 8 turns) + new message
+        # Build messages: system + last 8 history turns + new user message
         messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(history[-8:])  # Keep last 8 conversation turns
+        messages.extend(history[-8:])
         messages.append({"role": "user", "content": user_message})
 
-        # Call Databricks Foundation Model API via SDK's API client
-        # (handles auth automatically — works in Databricks Apps)
-        data = self._call_endpoint(messages, max_tokens=2000, temperature=0.2)
-
         reply = ""
-        if isinstance(data, dict):
-            choices = data.get("choices", [])
-            if choices:
-                reply = choices[0].get("message", {}).get("content", "")
-        elif hasattr(data, "choices") and data.choices:
-            reply = data.choices[0].message.content
+        tool_calls_made = 0
+        tools = AGENT_TOOLS if tool_executor else None
+
+        for _round in range(self.MAX_TOOL_ROUNDS):
+            data = self._call_endpoint(messages, max_tokens=2000, temperature=0.2, tools=tools)
+
+            # Extract the response message
+            if isinstance(data, dict):
+                choices = data.get("choices", [])
+                message = choices[0].get("message", {}) if choices else {}
+            elif hasattr(data, "choices") and data.choices:
+                msg = data.choices[0].message
+                message = {"role": getattr(msg, "role", "assistant"),
+                           "content": getattr(msg, "content", None),
+                           "tool_calls": getattr(msg, "tool_calls", None)}
+            else:
+                message = {}
+
+            tool_calls = message.get("tool_calls")
+
+            # No tool calls → this is the final answer
+            if not tool_calls or not tool_executor:
+                reply = message.get("content") or ""
+                if not isinstance(reply, str):
+                    reply = ""
+                break
+
+            # Append assistant message (with tool_calls) to conversation
+            messages.append({
+                "role": "assistant",
+                "content": message.get("content"),  # may be None
+                "tool_calls": tool_calls,
+            })
+
+            # Execute each tool call and feed results back
+            for tc in tool_calls:
+                tool_calls_made += 1
+                if isinstance(tc, dict):
+                    tc_id = tc.get("id", "")
+                    fn = tc.get("function", {})
+                    tool_name = fn.get("name", "")
+                    try:
+                        arguments = json.loads(fn.get("arguments", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        arguments = {}
+                else:
+                    tc_id = getattr(tc, "id", "")
+                    fn = getattr(tc, "function", None)
+                    tool_name = getattr(fn, "name", "") if fn else ""
+                    try:
+                        arguments = json.loads(getattr(fn, "arguments", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        arguments = {}
+
+                try:
+                    result_str = tool_executor(tool_name, arguments)
+                except Exception as e:
+                    result_str = json.dumps({"error": str(e)})
+
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc_id,
+                    "content": result_str,
+                })
+        else:
+            # Exhausted MAX_TOOL_ROUNDS — use last message content
+            reply = message.get("content") or ""
+            if not isinstance(reply, str):
+                reply = ""
 
         # Extract SQL block if present
         sql_match = re.search(r"```sql\s*([\s\S]*?)```", reply, re.IGNORECASE)
@@ -279,6 +341,7 @@ class LLMService:
         return {
             "reply": reply,
             "sql": sql,
+            "tool_calls_made": tool_calls_made,
         }
 
     def generate_transform(

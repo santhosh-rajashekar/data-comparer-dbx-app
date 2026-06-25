@@ -7,3 +7,11 @@ resources:
         Performs 3-way reconciliation across COA, FAQ (SAP), and DataPool.
         Uses Databricks Foundation Model API for AI-powered analysis.
       source_code_path: ../src/rdm_app
+      permissions:
+        # Members of this AAD group (synced to workspace via SCIM) can use the app.
+        # Set rdm_access_group variable per target to control per-environment access.
+        - group_name: ${var.rdm_access_group}
+          level: CAN_USE
+        # Bundle deployer retains management rights
+        - service_principal_name: ${var.deploy_sp}
+          level: CAN_MANAGE

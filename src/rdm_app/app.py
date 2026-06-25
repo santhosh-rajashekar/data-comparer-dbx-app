@@ -58,6 +58,18 @@ def get_store():
     return _sessions[sid]
 
 
+def get_current_user() -> dict:
+    """Read user identity from Databricks Apps proxy headers.
+
+    Databricks Apps injects X-Forwarded-Email and X-Forwarded-User
+    after validating the user's workspace SSO session.
+    These headers are trustworthy — they cannot be spoofed by the client.
+    """
+    email = request.headers.get("X-Forwarded-Email", "")
+    user = request.headers.get("X-Forwarded-User", email)
+    return {"email": email, "user": user or email}
+
+
 # Initialize services
 llm_service = LLMService(
     endpoint_name=os.environ.get("SERVING_ENDPOINT", "databricks-claude-sonnet-4-5")
@@ -73,6 +85,12 @@ jira_service = JiraService()
 def index():
     """Render the main RDM 3-Way Diff page."""
     return render_template("index.html")
+
+
+@app.route("/api/whoami", methods=["GET"])
+def whoami():
+    """Return the authenticated user's identity (from Databricks Apps proxy headers)."""
+    return jsonify(get_current_user())
 
 
 @app.route("/api/upload", methods=["POST"])
@@ -317,7 +335,11 @@ def _execute_agent_tool(tool_name: str, arguments: dict, store: dict) -> str:
                 if store.get("sources", {}).get(src):
                     sources.append(src)
 
-            # Create JIRA story
+            # Create JIRA story (include requestor identity)
+            current_user = get_current_user()
+            ctx = additional_context
+            if current_user["email"]:
+                ctx = f"{ctx}\nRequested by: {current_user['email']}".strip()
             result = jira_service.create_conflict_story(
                 field=field,
                 conflict_count=conflict_count,
@@ -326,8 +348,10 @@ def _execute_agent_tool(tool_name: str, arguments: dict, store: dict) -> str:
                 all_conflict_rows=all_rows,
                 sources=sources,
                 priority=priority,
-                additional_context=additional_context,
+                additional_context=ctx,
             )
+            if result.get("success"):
+                logger.info(f"JIRA story created: {result['key']} by {current_user['email']} for field '{field}'")
 
             return json.dumps(result)
         except Exception as e:

@@ -354,6 +354,160 @@ function refreshWelcomeChips() {
 // Initialize on load
 loadQuestionPatterns();
 
+// ==================== User Profile & Identity ====================
+
+var _currentUser = { email: '', name: '' };
+
+// Fetch user identity and populate both header avatar + chat badge
+(function fetchCurrentUser() {
+  fetch('/api/whoami')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!data.email) return;
+      _currentUser.email = data.email;
+
+      // Derive display name from email prefix
+      var raw = data.email.split('@')[0].replace(/[._-]/g, ' ');
+      var name = raw.replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+      _currentUser.name = name;
+
+      // --- Main header avatar ---
+      var initials = name.split(' ').map(function(w) { return w[0]; }).join('').slice(0, 2).toUpperCase();
+      var avatarEl = document.getElementById('userInitials');
+      if (avatarEl) avatarEl.textContent = initials;
+      var avatarWrap = document.getElementById('userAvatar');
+      if (avatarWrap) avatarWrap.title = data.email;
+
+      // Populate user menu
+      var menuName = document.getElementById('userMenuName');
+      if (menuName) menuName.textContent = name;
+      var menuEmail = document.getElementById('userMenuEmail');
+      if (menuEmail) menuEmail.textContent = data.email;
+
+      // --- Chat panel user badge ---
+      var badge = document.getElementById('rdmUserBadge');
+      if (badge) {
+        badge.textContent = name.split(' ')[0]; // first name only
+        badge.title = data.email;
+        badge.style.display = 'inline-block';
+      }
+    })
+    .catch(function() {});
+})();
+
+function toggleUserMenu() {
+  var menu = document.getElementById('userMenu');
+  if (menu) menu.classList.toggle('open');
+}
+
+// Close user menu on outside click
+document.addEventListener('click', function(e) {
+  var profile = document.getElementById('userProfile');
+  if (profile && !profile.contains(e.target)) {
+    var menu = document.getElementById('userMenu');
+    if (menu) menu.classList.remove('open');
+  }
+});
+
+// ==================== Agent Panel Width & Fullscreen ====================
+
+var _rdmFullscreen = false;
+var _rdmWideMode = false;
+
+function setRdmWidth(mode) {
+  var panel = document.getElementById('rdmPanel');
+  var btn = document.getElementById('rdmExpandBtn');
+  if (!panel) return;
+  if (mode === 'wide') {
+    _rdmWideMode = !_rdmWideMode;
+    panel.classList.toggle('wide', _rdmWideMode);
+    if (btn) {
+      btn.classList.toggle('active', _rdmWideMode);
+      btn.title = _rdmWideMode ? 'Restore width' : 'Expand panel';
+    }
+    // Exit fullscreen if active
+    if (_rdmFullscreen) toggleRdmFullscreen();
+  }
+}
+
+function toggleRdmFullscreen() {
+  var panel = document.getElementById('rdmPanel');
+  var btn = document.getElementById('rdmFullscreenBtn');
+  if (!panel) return;
+  _rdmFullscreen = !_rdmFullscreen;
+  panel.classList.toggle('fullscreen', _rdmFullscreen);
+  if (btn) {
+    btn.innerHTML = _rdmFullscreen ? '&#9633;' : '&#9974;'; // restore vs fullscreen icon
+    btn.classList.toggle('active', _rdmFullscreen);
+    btn.title = _rdmFullscreen ? 'Exit fullscreen' : 'Fullscreen agent';
+  }
+  // In fullscreen, also exit wide mode styling (width:100vw takes over)
+  if (_rdmFullscreen && _rdmWideMode) {
+    _rdmWideMode = false;
+    panel.classList.remove('wide');
+    var expBtn = document.getElementById('rdmExpandBtn');
+    if (expBtn) expBtn.classList.remove('active');
+  }
+  // Scroll chat to bottom after layout shift
+  setTimeout(function() {
+    var body = document.getElementById('rdmBody');
+    if (body) body.scrollTop = body.scrollHeight;
+  }, 50);
+}
+
+// ==================== Drag-to-Resize Handle ====================
+
+(function initResizeHandle() {
+  var handle = document.getElementById('rdmResizeHandle');
+  var panel = document.getElementById('rdmPanel');
+  if (!handle || !panel) return;
+
+  var dragging = false;
+  var startX = 0;
+  var startWidth = 0;
+  var MIN_WIDTH = 300;
+  var MAX_WIDTH = Math.round(window.innerWidth * 0.75);
+
+  handle.addEventListener('mousedown', function(e) {
+    if (_rdmFullscreen) return;
+    dragging = true;
+    startX = e.clientX;
+    startWidth = panel.offsetWidth;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', function(e) {
+    if (!dragging) return;
+    MAX_WIDTH = Math.round(window.innerWidth * 0.75);
+    var dx = startX - e.clientX; // dragging left = wider
+    var newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + dx));
+    panel.style.width = newWidth + 'px';
+    // Remove preset classes since we're in custom-width mode
+    panel.classList.remove('wide');
+    _rdmWideMode = false;
+  });
+
+  document.addEventListener('mouseup', function() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+
+  // Double-click handle: reset to default width
+  handle.addEventListener('dblclick', function() {
+    panel.style.width = '';
+    panel.classList.remove('wide');
+    _rdmWideMode = false;
+    var btn = document.getElementById('rdmExpandBtn');
+    if (btn) { btn.classList.remove('active'); btn.title = 'Expand panel'; }
+  });
+})();
+
 // ==================== Follow-up Suggestions ====================
 
 function rdmAppendSuggestions(suggestions) {

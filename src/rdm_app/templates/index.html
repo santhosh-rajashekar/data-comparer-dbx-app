@@ -16,7 +16,22 @@
     <h1>RDM 3-Way Diff</h1>
     <p>Reference & Master Data Quality Assurance — Databricks App</p>
   </div>
-  <button class="ai-cfg-btn connected" onclick="toggleRDM()" id="rdmBtn">&#129302; RDM Agent</button>
+  <!-- User profile + RDM Agent button grouped top-right -->
+  <div class="header-right">
+    <button class="ai-cfg-btn connected" onclick="toggleRDM()" id="rdmBtn">&#129302; RDM Agent</button>
+    <div class="user-profile" id="userProfile">
+    <div class="user-avatar" id="userAvatar" onclick="toggleUserMenu()" title="Loading...">
+      <span id="userInitials">&#9679;</span>
+    </div>
+    <div class="user-menu" id="userMenu">
+      <div class="user-menu-name" id="userMenuName">Loading...</div>
+      <div class="user-menu-email" id="userMenuEmail"></div>
+      <div class="user-menu-divider"></div>
+      <div class="user-menu-item">&#128100; Profile</div>
+      <div class="user-menu-item" onclick="toggleUserMenu()">&#10006; Close</div>
+    </div>
+    </div><!-- /user-profile -->
+  </div><!-- /header-right -->
 </header>
 
 <!-- Main Canvas -->
@@ -204,10 +219,15 @@
 
 <!-- RDM Agent Chat Panel -->
 <div class="rdm-panel" id="rdmPanel">
+  <!-- Drag-to-resize handle on left edge -->
+  <div class="rdm-resize-handle" id="rdmResizeHandle" title="Drag to resize"></div>
   <div class="rdm-header">
     <span>&#129302; RDM Agent</span>
-    <span class="rdm-badge">Databricks AI</span>
-    <button class="rdm-close-btn" onclick="toggleRDM()">✕</button>
+    <div class="rdm-header-actions">
+      <button class="rdm-action-btn" id="rdmExpandBtn" onclick="setRdmWidth('wide')" title="Expand panel">&#8596;</button>
+      <button class="rdm-action-btn" id="rdmFullscreenBtn" onclick="toggleRdmFullscreen()" title="Fullscreen agent">&#9974;</button>
+      <button class="rdm-close-btn" onclick="toggleRDM()">&#10005;</button>
+    </div>
   </div>
   <div class="rdm-body" id="rdmBody">
     <div class="rdm-welcome" id="rdmWelcome">

@@ -35,7 +35,7 @@ jobs:
           BUNDLE_VAR_hub_catalog:       ${{ vars.HUB_CATALOG }}
           BUNDLE_VAR_serving_endpoint:  ${{ vars.SERVING_ENDPOINT }}
       - name: Start app
-        run: databricks bundle run rdm_3way_diff --target test
+        run: databricks bundle run ref_reconcile_app --target test
         env:
           DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
@@ -58,7 +58,7 @@ jobs:
           BUNDLE_VAR_hub_catalog:       ${{ vars.HUB_CATALOG }}
           BUNDLE_VAR_serving_endpoint:  ${{ vars.SERVING_ENDPOINT }}
       - name: Start app
-        run: databricks bundle run rdm_3way_diff --target dev
+        run: databricks bundle run ref_reconcile_app --target dev
         env:
           DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}

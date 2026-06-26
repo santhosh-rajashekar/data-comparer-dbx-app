@@ -13,18 +13,9 @@ bundle:
   name: data-comparer-dbx-app
 
 variables:
-  serving_endpoint:
-    description: "Foundation Model API endpoint for RDM Agent"
-    default: "databricks-claude-sonnet-4-5"
-  flask_secret:
-    description: "Flask session secret key"
-    default: "rdm-app-secret-change-in-prod"
   deploy_sp:
     description: "Service principal used for bundle deployment"
     default: "sp-data-comparer-deploy"
-  hub_catalog:
-    description: "UC catalog for RDM app volumes and schemas"
-    default: "data_mesh_hub"
 
 include:
   - resources/*.yml

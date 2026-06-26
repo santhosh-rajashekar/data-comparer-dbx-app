@@ -4,6 +4,6 @@ openpyxl>=3.1.0
 ./pyxlsb-1.0.10-py2.py3-none-any.whl
 pandas>=2.0.0
 ./rapidfuzz-3.13.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-xlsxwriter>=3.1.0
+./xlsxwriter-3.2.9-py3-none-any.whl
 gunicorn>=21.2.0
 requests>=2.31.0

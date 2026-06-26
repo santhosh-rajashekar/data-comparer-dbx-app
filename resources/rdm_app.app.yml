@@ -1,7 +1,7 @@
 resources:
   apps:
-    rdm_3way_diff:
-      name: rdm-3way-diff-${bundle.target}
+    ref_reconcile_app:
+      name: ref-reconcile-app
       description: |
         RDM 3-Way Diff — Reference & Master Data Quality Assurance.
         Performs 3-way reconciliation across COA, FAQ (SAP), and DataPool.

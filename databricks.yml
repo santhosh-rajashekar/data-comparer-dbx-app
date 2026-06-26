@@ -2,6 +2,12 @@
 # RDM 3-Way Diff — Databricks App Bundle
 # Reference & Master Data Quality Assurance Tool
 # ============================================================
+# All workspace-specific values are injected at deploy time via:
+#   Secrets : DATABRICKS_HOST, DATABRICKS_TOKEN, FLASK_SECRET
+#   Variables: HUB_CATALOG, RDM_ACCESS_GROUP, SERVING_ENDPOINT
+# These are stored in GitHub environment-level secrets/variables.
+# Nothing workspace-specific is hardcoded in this file.
+# ============================================================
 
 bundle:
   name: data-comparer-dbx-app
@@ -13,14 +19,11 @@ variables:
   flask_secret:
     description: "Flask session secret key"
     default: "rdm-app-secret-change-in-prod"
-  rdm_access_group:
-    description: "AAD group (synced via SCIM) whose members can access the app"
-    default: "rdm-tool-users"
   deploy_sp:
     description: "Service principal used for bundle deployment"
     default: "sp-data-comparer-deploy"
   hub_catalog:
-    description: "UC catalog for RDM app volumes and schemas (data_mesh_hub)"
+    description: "UC catalog for RDM app volumes and schemas"
     default: "data_mesh_hub"
 
 include:
@@ -28,20 +31,14 @@ include:
 
 targets:
 
-  # ── Existing workspace ─────────────────────────────────────────────────
+  # ── dev ────────────────────────────────────────────────────────────────
+  # Workspace resolved from DATABRICKS_HOST env var (GitHub env secret).
+  # Variable overrides injected via BUNDLE_VAR_* env vars (GitHub vars).
   dev:
     mode: development
     default: true
-    workspace:
-      host: https://adb-7405616457611961.1.azuredatabricks.net
-    variables:
-      flask_secret: "rdm-app-secret-dev"
 
-  # ── test → dbx-dps-raise-dev workspace ────────────────────────────────
+  # ── test ───────────────────────────────────────────────────────────────
+  # Same pattern — host and vars come entirely from GitHub environment.
   test:
-    workspace:
-      host: https://adb-7405605730069993.13.azuredatabricks.net
-    variables:
-      flask_secret: "rdm-app-secret-test"
-      hub_catalog: "data_mesh_hub"
-      rdm_access_group: "rdm-tool-users"
+    mode: production

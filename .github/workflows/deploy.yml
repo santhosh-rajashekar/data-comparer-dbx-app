@@ -17,27 +17,13 @@ env:
   DATABRICKS_BUNDLE_NAME: data-comparer-dbx-app
 
 jobs:
-  # Validate bundle structure against dev (existing workspace, repo-level creds)
-  validate:
-    name: Validate Bundle
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: databricks/setup-cli@main
-      - name: Validate bundle
-        run: databricks bundle validate --strict
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-
   # ── test: dbx-dps-raise-dev — auto-deploys on every push to main ──────
-  # Environment-level secrets for 'test' hold the raise workspace creds.
+  # bundle deploy validates before deploying, so no separate validate job needed.
   deploy-test:
     name: Deploy to TEST (dbx-dps-raise-dev)
-    needs: validate
-    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'test')
     runs-on: ubuntu-latest
     environment: test
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'test')
     steps:
       - uses: actions/checkout@v4
       - uses: databricks/setup-cli@main
@@ -50,10 +36,9 @@ jobs:
   # ── dev: existing workspace — manual dispatch only ────────────────────
   deploy-dev:
     name: Deploy to DEV
-    needs: validate
-    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'dev'
     runs-on: ubuntu-latest
     environment: dev
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'dev'
     steps:
       - uses: actions/checkout@v4
       - uses: databricks/setup-cli@main

@@ -17,9 +17,9 @@ env:
   DATABRICKS_BUNDLE_NAME: data-comparer-dbx-app
 
 jobs:
-  # ── test: dbx-dps-raise-dev — auto-deploys on every push to main ──────
+  # ── test ── auto on push to main ──────────────────────────────────────
   deploy-test:
-    name: Deploy to TEST (dbx-dps-raise-dev)
+    name: Deploy to TEST
     runs-on: ubuntu-latest
     environment: test
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'test')
@@ -29,15 +29,18 @@ jobs:
       - name: Deploy bundle
         run: databricks bundle deploy --target test
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_HOST:              ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN:             ${{ secrets.DATABRICKS_TOKEN }}
+          BUNDLE_VAR_flask_secret:      ${{ secrets.FLASK_SECRET }}
+          BUNDLE_VAR_hub_catalog:       ${{ vars.HUB_CATALOG }}
+          BUNDLE_VAR_serving_endpoint:  ${{ vars.SERVING_ENDPOINT }}
       - name: Start app
         run: databricks bundle run rdm_3way_diff --target test
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
-  # ── dev: existing workspace — manual dispatch only ────────────────────
+  # ── dev ── manual dispatch only ───────────────────────────────────────
   deploy-dev:
     name: Deploy to DEV
     runs-on: ubuntu-latest
@@ -49,10 +52,13 @@ jobs:
       - name: Deploy bundle
         run: databricks bundle deploy --target dev
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_HOST:              ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN:             ${{ secrets.DATABRICKS_TOKEN }}
+          BUNDLE_VAR_flask_secret:      ${{ secrets.FLASK_SECRET }}
+          BUNDLE_VAR_hub_catalog:       ${{ vars.HUB_CATALOG }}
+          BUNDLE_VAR_serving_endpoint:  ${{ vars.SERVING_ENDPOINT }}
       - name: Start app
         run: databricks bundle run rdm_3way_diff --target dev
         env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}

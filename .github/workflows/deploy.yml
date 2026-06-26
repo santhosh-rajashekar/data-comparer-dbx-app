@@ -3,8 +3,6 @@ name: Deploy RDM App
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
   workflow_dispatch:
     inputs:
       target:
@@ -14,101 +12,53 @@ on:
         options:
           - dev
           - test
-          - prp
-          - prd
 
 env:
   DATABRICKS_BUNDLE_NAME: data-comparer-dbx-app
 
 jobs:
+  # Validate bundle structure against dev (existing workspace, repo-level creds)
   validate:
     name: Validate Bundle
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: databricks/setup-cli@main
-
       - name: Validate bundle
         run: databricks bundle validate --strict
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
-  deploy-dev:
-    name: Deploy to DEV
-    needs: validate
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    environment: dev
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: databricks/setup-cli@main
-
-      - name: Deploy to dev
-        run: |
-          databricks bundle deploy --target dev
-          databricks bundle run rdm_3way_diff --target dev
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
-
+  # ── test: dbx-dps-raise-dev — auto-deploys on every push to main ──────
+  # Environment-level secrets for 'test' hold the raise workspace creds.
   deploy-test:
-    name: Deploy to TEST
-    needs: deploy-dev
+    name: Deploy to TEST (dbx-dps-raise-dev)
+    needs: validate
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'test')
     runs-on: ubuntu-latest
     environment: test
     steps:
       - uses: actions/checkout@v4
-
       - uses: databricks/setup-cli@main
-
       - name: Deploy to test
-        run: |
-          databricks bundle deploy --target test
-          databricks bundle run rdm_3way_diff --target test
+        run: databricks bundle deploy --target test
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
-  deploy-prp:
-    name: Deploy to PRE-PROD
-    needs: deploy-test
+  # ── dev: existing workspace — manual dispatch only ────────────────────
+  deploy-dev:
+    name: Deploy to DEV
+    needs: validate
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'dev'
     runs-on: ubuntu-latest
-    environment: prp
+    environment: dev
     steps:
       - uses: actions/checkout@v4
-
       - uses: databricks/setup-cli@main
-
-      - name: Deploy to prp
-        run: |
-          databricks bundle deploy --target prp
-          databricks bundle run rdm_3way_diff --target prp
+      - name: Deploy to dev
+        run: databricks bundle deploy --target dev
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
-
-  deploy-prd:
-    name: Deploy to PRODUCTION
-    needs: deploy-prp
-    runs-on: ubuntu-latest
-    environment: prd
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: databricks/setup-cli@main
-
-      - name: Deploy to production
-        run: |
-          databricks bundle deploy --target prd
-          databricks bundle run rdm_3way_diff --target prd
-        env:
-          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}

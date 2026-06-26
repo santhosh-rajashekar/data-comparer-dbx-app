@@ -6,31 +6,20 @@ on:
 
 jobs:
   validate:
-    name: Validate & Dry Run
+    name: Validate Bundle
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: databricks/setup-cli@main
 
-      - name: Validate bundle (all targets)
-        run: |
-          echo "=== Validating dev ==="
-          databricks bundle validate --target dev
-          echo "=== Validating test ==="
-          databricks bundle validate --target test
-          echo "=== Validating prp ==="
-          databricks bundle validate --target prp
-          echo "=== Validating prd ==="
-          databricks bundle validate --target prd
+      - name: Validate dev (existing workspace)
+        run: databricks bundle validate --target dev
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
-      - name: Summary
-        run: databricks bundle summary --target dev
+      - name: Validate test (dbx-dps-raise-dev)
+        run: databricks bundle validate --target test
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_CLIENT_ID: ${{ secrets.SP_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.SP_CLIENT_SECRET }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}

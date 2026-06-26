@@ -19,11 +19,16 @@ variables:
   deploy_sp:
     description: "Service principal used for bundle deployment"
     default: "sp-data-comparer-deploy"
+  hub_catalog:
+    description: "UC catalog for RDM app volumes and schemas (data_mesh_hub)"
+    default: "data_mesh_hub"
 
 include:
   - resources/*.yml
 
 targets:
+
+  # ── Existing workspace ─────────────────────────────────────────────────
   dev:
     mode: development
     default: true
@@ -31,28 +36,12 @@ targets:
       host: https://adb-7405616457611961.1.azuredatabricks.net
     variables:
       flask_secret: "rdm-app-secret-dev"
-      # In dev, the same group applies; override here if needed
-      # rdm_access_group: "rdm-tool-users-dev"
 
+  # ── test → dbx-dps-raise-dev workspace ────────────────────────────────
   test:
     workspace:
-      host: https://adb-7405616457611961.1.azuredatabricks.net
+      host: https://adb-7405605730069993.13.azuredatabricks.net
     variables:
       flask_secret: "rdm-app-secret-test"
-
-  prp:
-    workspace:
-      host: https://adb-7405616457611961.1.azuredatabricks.net
-    variables:
-      flask_secret: "rdm-app-secret-prp"
-
-  prd:
-    mode: production
-    workspace:
-      host: https://adb-7405616457611961.1.azuredatabricks.net
-    variables:
-      serving_endpoint: "databricks-claude-sonnet-4-5"
-      flask_secret: "rdm-app-secret-prd"
-    permissions:
-      - service_principal_name: ${var.deploy_sp}
-        level: CAN_MANAGE
+      hub_catalog: "data_mesh_hub"
+      rdm_access_group: "rdm-tool-users"

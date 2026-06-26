@@ -17,7 +17,7 @@ env:
   DATABRICKS_BUNDLE_NAME: data-comparer-dbx-app
 
 jobs:
-  # ── test ── auto on push to main ──────────────────────────────────────
+  # ── test: dbx-dps-raise-dev ───────────────────────────────────────────
   deploy-test:
     name: Deploy to TEST
     runs-on: ubuntu-latest
@@ -26,21 +26,40 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: databricks/setup-cli@main
-      - name: Deploy bundle
-        run: databricks bundle deploy --target test
+      - name: Configure app.yaml with environment values
         env:
-          DATABRICKS_HOST:              ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN:             ${{ secrets.DATABRICKS_TOKEN }}
-          BUNDLE_VAR_flask_secret:      ${{ secrets.FLASK_SECRET }}
-          BUNDLE_VAR_hub_catalog:       ${{ vars.HUB_CATALOG }}
-          BUNDLE_VAR_serving_endpoint:  ${{ vars.SERVING_ENDPOINT }}
+          FLASK_SECRET:    ${{ secrets.FLASK_SECRET }}
+          HUB_CATALOG:     ${{ vars.HUB_CATALOG }}
+          SERVING_ENDPOINT: ${{ vars.SERVING_ENDPOINT }}
+        run: |
+          python3 - << 'EOF'
+          import yaml, os
+          with open('src/rdm_app/app.yaml') as f:
+              cfg = yaml.safe_load(f)
+          updates = {
+              'FLASK_SECRET_KEY':   os.environ['FLASK_SECRET'],
+              'UPLOAD_VOLUME_PATH': f"/Volumes/{os.environ['HUB_CATALOG']}/rdm/uploads",
+              'SERVING_ENDPOINT':   os.environ['SERVING_ENDPOINT'],
+          }
+          for e in cfg.get('env', []):
+              if e['name'] in updates:
+                  e['value'] = updates[e['name']]
+          with open('src/rdm_app/app.yaml', 'w') as f:
+              yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+          print('app.yaml configured')
+          EOF
+      - name: Deploy bundle
+        run: databricks bundle deploy --target test --force-lock
+        env:
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       - name: Start app
         run: databricks bundle run ref_reconcile_app --target test
         env:
           DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
 
-  # ── dev ── manual dispatch only ───────────────────────────────────────
+  # ── dev: existing workspace — manual dispatch only ────────────────────
   deploy-dev:
     name: Deploy to DEV
     runs-on: ubuntu-latest
@@ -49,14 +68,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: databricks/setup-cli@main
-      - name: Deploy bundle
-        run: databricks bundle deploy --target dev
+      - name: Configure app.yaml with environment values
         env:
-          DATABRICKS_HOST:              ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN:             ${{ secrets.DATABRICKS_TOKEN }}
-          BUNDLE_VAR_flask_secret:      ${{ secrets.FLASK_SECRET }}
-          BUNDLE_VAR_hub_catalog:       ${{ vars.HUB_CATALOG }}
-          BUNDLE_VAR_serving_endpoint:  ${{ vars.SERVING_ENDPOINT }}
+          FLASK_SECRET:     ${{ secrets.FLASK_SECRET }}
+          HUB_CATALOG:      ${{ vars.HUB_CATALOG }}
+          SERVING_ENDPOINT: ${{ vars.SERVING_ENDPOINT }}
+        run: |
+          python3 - << 'EOF'
+          import yaml, os
+          with open('src/rdm_app/app.yaml') as f:
+              cfg = yaml.safe_load(f)
+          updates = {
+              'FLASK_SECRET_KEY':   os.environ['FLASK_SECRET'],
+              'UPLOAD_VOLUME_PATH': f"/Volumes/{os.environ['HUB_CATALOG']}/rdm/uploads",
+              'SERVING_ENDPOINT':   os.environ['SERVING_ENDPOINT'],
+          }
+          for e in cfg.get('env', []):
+              if e['name'] in updates:
+                  e['value'] = updates[e['name']]
+          with open('src/rdm_app/app.yaml', 'w') as f:
+              yaml.dump(cfg, f, default_flow_style=False, allow_unicode=True)
+          print('app.yaml configured')
+          EOF
+      - name: Deploy bundle
+        run: databricks bundle deploy --target dev --force-lock
+        env:
+          DATABRICKS_HOST:  ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
       - name: Start app
         run: databricks bundle run ref_reconcile_app --target dev
         env:

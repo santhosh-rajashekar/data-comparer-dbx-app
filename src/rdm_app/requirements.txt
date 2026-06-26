@@ -1,7 +1,7 @@
 flask>=3.0.0
 databricks-sdk>=0.30.0
 openpyxl>=3.1.0
-pyxlsb>=1.0.10
+./pyxlsb-1.0.10-py2.py3-none-any.whl
 pandas>=2.0.0
 rapidfuzz>=3.5.0
 xlsxwriter>=3.1.0

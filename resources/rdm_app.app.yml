@@ -7,11 +7,20 @@ resources:
         Performs 3-way reconciliation across COA, FAQ (SAP), and DataPool.
         Uses Databricks Foundation Model API for AI-powered analysis.
       source_code_path: ../src/rdm_app
+
+      # Bundle variables override the static values in src/rdm_app/app.yaml.
+      # Values come from GitHub environment secrets/variables → BUNDLE_VAR_* env vars.
+      env:
+        - name: UPLOAD_VOLUME_PATH
+          value: "/Volumes/${var.hub_catalog}/rdm/uploads"
+        - name: SERVING_ENDPOINT
+          value: "${var.serving_endpoint}"
+        - name: FLASK_SECRET_KEY
+          value: "${var.flask_secret}"
+
       permissions:
-        # Members of this AAD group (synced to workspace via SCIM) can use the app.
-        # Set rdm_access_group variable per target to control per-environment access.
-        - group_name: ${var.rdm_access_group}
-          level: CAN_USE
-        # Bundle deployer retains management rights
+        # Add group_name + CAN_USE here when access groups are configured.
+        # - group_name: rdm-tool-users
+        #   level: CAN_USE
         - service_principal_name: ${var.deploy_sp}
           level: CAN_MANAGE

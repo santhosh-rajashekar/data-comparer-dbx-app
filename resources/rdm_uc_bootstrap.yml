@@ -1,0 +1,46 @@
+# UC Bootstrap — Fresh Workspace Setup
+# ============================================================
+# Creates the catalog, schema, and uploads volume required by
+# the RDM 3-Way Diff app in a workspace without data_mesh_hub.
+#
+# Included via the global resources/*.yml pattern but content is
+# commented out by default to prevent CATALOG_ALREADY_EXISTS in
+# dev / test / prp / prd where these objects already exist.
+#
+# PREFERRED: Run the idempotent UC Bootstrap notebook instead:
+#   data-mesh-demo/src/notebooks/UC_Bootstrap_New_Workspace
+#   (uses CREATE ... IF NOT EXISTS — safe to run multiple times)
+#
+# BUNDLE RESOURCE APPROACH (once-off per new workspace):
+#   1. Uncomment the resources block below
+#   2. databricks bundle deploy --target dev-raise --profile raise-dev
+#   3. Re-comment to prevent conflicts on subsequent deploys
+# ============================================================
+
+#resources:
+#
+#  catalogs:
+#    data_mesh_hub_raise:
+#      name: ${var.hub_catalog}
+#      comment: "Data Mesh Hub Catalog | Owner: Data Platform Team"
+#      # Omitting storage_root — uses metastore default managed storage.
+#      # For production add:
+#      # storage_root: "abfss://<container>@<storage_account>.dfs.core.windows.net/${var.hub_catalog}"
+#      properties:
+#        domain: "Cross-Domain"
+#        owner: "Data Platform Team"
+#        data_mesh_role: "Hub Catalog"
+#
+#  schemas:
+#    rdm_schema_raise:
+#      name: rdm
+#      catalog_name: ${var.hub_catalog}
+#      comment: "RDM 3-Way Diff schema — holds uploads volume and diff results"
+#
+#  volumes:
+#    rdm_uploads_raise:
+#      catalog_name: ${var.hub_catalog}
+#      schema_name: rdm
+#      name: uploads
+#      volume_type: MANAGED
+#      comment: "Raw uploaded source files for RDM 3-Way Diff (COA / FAQ / DataPool)"

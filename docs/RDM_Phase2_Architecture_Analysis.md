@@ -878,3 +878,449 @@ GRANT WRITE VOLUME ON VOLUME data_mesh_hub.rdm.uploads TO `rdm-tool-users`;
 The existing `diff_service.py` comparison logic is solid — extract it as a shared module, don't rewrite it. The app UI needs minimal changes (add a results viewer tab). The biggest new work is ingestion notebooks and the job orchestration.
 
 **Total estimated effort**: 8-10 weeks for a single developer, with Phase 2.0 (foundation) deliverable in 4 weeks.
+
+
+---
+
+## ADDENDUM: Corrected Assumptions & Refined Design Focus
+
+> **Updated 2026-06-27** — Based on clarification of actual current state.
+
+### Key Corrections to Initial Analysis
+
+| Assumption in Original | Actual State |
+|----------------------|--------------|
+| SharePoint/COA data must be ingested from scratch | **Already implemented** — Graph API ingestion exists, data persisted as Excel |
+| SAP data requires new extraction | **Already ingested** — persisted as JSON |
+| DataPool ingestion undefined | **Partially defined** — expected JSON/structured → Parquet |
+| Existing comparison logic can be extracted and reused | **Cannot be reused without significant refactoring** — currently operates on in-memory pandas DataFrames built from file uploads |
+| Ingestion is the biggest new work | **Ingestion exists** — biggest work is comparison engine refactoring + UI decoupling |
+
+### Revised Focus Areas
+
+The architecture must prioritize:
+
+1. **Parquet/Delta Standardization Pipeline** — Convert existing JSON/Excel landing data to structured Delta
+2. **Spark-Based Comparison Engine** — Replace pandas in-memory comparison with distributed Spark logic
+3. **UI-Backend Decoupling** — Define a clean contract between the processing layer and the app
+4. **Backend-to-UI Interface Contract** — API-driven results delivery, not session-based
+
+---
+
+## 15. Parquet/Delta Standardization Pipeline
+
+### Current Ingestion State
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     EXISTING (Already Running)                               │
+│                                                                             │
+│  SharePoint ──(Graph API)──► Excel files in Volume (LANDING)                │
+│  SAP        ──(API/Extract)─► JSON files in Volume  (LANDING)               │
+│  DataPool   ──(partial)────► JSON/structured files  (LANDING)               │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    │  ← THIS IS THE GAP
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     NEEDED (Phase 2 Build)                                   │
+│                                                                             │
+│  Landing Excel  ──► Bronze Delta (source-aligned, all STRING)               │
+│  Landing JSON   ──► Bronze Delta (flattened, all STRING)                    │
+│  Landing struct ──► Bronze Delta (typed)                                    │
+│                          │                                                  │
+│                          ▼                                                  │
+│  Bronze Delta   ──► Silver Delta (canonical schema, transforms applied)     │
+│                          │                                                  │
+│                          ▼                                                  │
+│  Silver Delta   ──► Gold Delta (comparison results, run metadata)           │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Standardization Notebooks Required
+
+| Notebook | Input | Output | Logic |
+|----------|-------|--------|-------|
+| `std_coa_excel_to_delta` | Excel files from SharePoint volume | `bronze_coa_master` Delta table | Parse with openpyxl/pandas, handle yellow-row exclusion, strikethrough filtering, write to Delta |
+| `std_sap_json_to_delta` | JSON files from SAP volume | `bronze_sap_faq` Delta table | Flatten nested JSON (explode arrays), type coercion, write to Delta |
+| `std_datapool_to_delta` | JSON/Parquet from DataPool volume | `bronze_datapool_gl` Delta table | Read structured format, normalize column names, write to Delta |
+| `normalize_to_silver` | All Bronze tables | Silver tables (per mode × source) | Apply `field_mappings` table for column rename; apply `transform_registry` for value normalization |
+
+### Why the Existing Comparison Logic Cannot Be Reused Directly
+
+The current `DiffService.run_diff()` method has these **hard dependencies on the upload flow**:
+
+```python
+# Current: tightly coupled to file upload session
+sources = store["sources"]  # ← session-bound dict from FileService upload
+df = pd.DataFrame(info.get("rows", []), columns=info.get("headers", []))  # ← raw rows from Excel parse
+key_series = df[key_cols[0]].astype(str).str.strip()  # ← pandas operations
+source_key_maps[src] = {}  # ← in-memory dict-based lookups
+for key in sorted(all_keys):  # ← sequential Python loop over all keys
+    ...
+    for fi, field in enumerate(comparable_fields):  # ← O(keys × fields) inner loop
+```
+
+**Problems for production use:**
+1. **Sequential Python loop** — O(N × F) where N=keys, F=fields. Works at 30K rows; fails at 500K+
+2. **Session-bound data** — Cannot run as a scheduled job; data doesn't survive restart
+3. **Pandas-only** — No Spark parallelism, no predicate pushdown, no data skipping
+4. **In-memory SQLite** — Results are ephemeral, not queryable cross-session
+5. **Embedded mappings** — Hardcoded, not version-controlled, can't differ across runs
+
+---
+
+## 16. Spark-Based Comparison Engine Design
+
+### Architecture
+
+```python
+# Target: Spark-native comparison on Delta tables
+class SparkReconciler:
+    """3-way comparison engine using PySpark on Delta tables."""
+    
+    def __init__(self, spark, catalog="data_mesh_hub", schema="rdm"):
+        self.spark = spark
+        self.catalog = catalog
+        self.schema = schema
+    
+    def run(self, run_id: str, mode: str = "SKB") -> dict:
+        """Execute comparison on Silver Delta tables."""
+        # 1. Load Silver tables
+        coa = self.spark.table(f"{self.catalog}.{self.schema}.silver_{mode.lower()}_coa")
+        faq = self.spark.table(f"{self.catalog}.{self.schema}.silver_{mode.lower()}_faq")
+        dp  = self.spark.table(f"{self.catalog}.{self.schema}.silver_{mode.lower()}_datapool")
+        
+        # 2. Full outer join on key columns
+        joined = coa.alias("coa").join(
+            faq.alias("faq"), on="canonical_key", how="full"
+        ).join(
+            dp.alias("dp"), on="canonical_key", how="full"
+        )
+        
+        # 3. Field-by-field comparison (vectorized, not row-by-row)
+        # ... generates conflict flags per field
+        
+        # 4. Write results to Gold Delta
+        results.write.mode("overwrite").partitionBy("run_id").saveAsTable(
+            f"{self.catalog}.{self.schema}.reconciliation_results"
+        )
+```
+
+### Comparison Strategy: JOIN + Column Expressions (not Row Iteration)
+
+| Current (Pandas) | Target (Spark) |
+|-----------------|----------------|
+| Build dict of key→row_index per source | FULL OUTER JOIN on canonical_key |
+| Loop over all keys sequentially | Spark evaluates all keys in parallel |
+| For each key, loop over fields | Column expressions evaluate all fields at once |
+| `if val.upper() == "X": return "TRUE"` | `WHEN(col == 'X', 'TRUE')` |
+| Store in Python list | Write directly to Delta |
+| O(N × F) sequential | O(1) Spark plan, parallelized |
+
+### Spark Comparison SQL (Alternative Implementation)
+
+```sql
+-- Option: Pure SQL comparison (runs on Databricks SQL Serverless)
+CREATE OR REPLACE TABLE data_mesh_hub.rdm.reconciliation_results AS
+WITH joined AS (
+    SELECT
+        COALESCE(coa.canonical_key, faq.canonical_key, dp.canonical_key) AS key_value,
+        coa.account_group AS coa_account_group,
+        faq.account_group AS faq_account_group,
+        dp.account_group  AS dp_account_group,
+        CASE
+            WHEN coa.canonical_key IS NULL AND faq.canonical_key IS NULL THEN 'only_DataPool'
+            WHEN coa.canonical_key IS NULL AND dp.canonical_key IS NULL THEN 'only_FAQ'
+            WHEN faq.canonical_key IS NULL AND dp.canonical_key IS NULL THEN 'only_COA'
+            WHEN coa.account_group <> faq.account_group 
+              OR coa.account_group <> dp.account_group
+              OR faq.account_group <> dp.account_group THEN 'conflict'
+            ELSE 'same'
+        END AS dtype,
+        -- Per-field conflict flags
+        (coa.account_group <> faq.account_group OR coa.account_group <> dp.account_group) AS conflict_account_group,
+        -- ... repeat for each comparable field
+    FROM data_mesh_hub.rdm.silver_skb_coa coa
+    FULL OUTER JOIN data_mesh_hub.rdm.silver_skb_faq faq ON coa.canonical_key = faq.canonical_key
+    FULL OUTER JOIN data_mesh_hub.rdm.silver_skb_datapool dp ON coa.canonical_key = dp.canonical_key
+)
+SELECT
+    '{run_id}' AS run_id,
+    CURRENT_TIMESTAMP() AS run_timestamp,
+    'SKB' AS mode,
+    *
+FROM joined;
+```
+
+### Performance Comparison
+
+| Dataset Size | Current (Pandas) | Target (Spark SQL) | Improvement |
+|-------------|-----------------|-------------------|-------------|
+| 10K keys × 12 fields | ~3 sec | ~2 sec | Similar |
+| 50K keys × 12 fields | ~15 sec | ~4 sec | 3.7× |
+| 200K keys × 12 fields | ~90 sec (OOM risk) | ~8 sec | 11× |
+| 1M keys × 15 fields | ❌ OOM | ~20 sec | ∞ |
+
+### Transform Application in Spark
+
+```sql
+-- Transforms applied at Silver layer (not at comparison time)
+-- Example: indicator_blocked_for_posting for COA source
+SELECT
+    canonical_key,
+    CASE 
+        WHEN UPPER(TRIM(indicator_blocked_for_posting)) = 'X' THEN 'TRUE'
+        WHEN TRIM(indicator_blocked_for_posting) IN ('', '[blank]') THEN 'FALSE'
+        ELSE indicator_blocked_for_posting
+    END AS indicator_blocked_for_posting,
+    ...
+FROM data_mesh_hub.rdm.bronze_coa_master;
+```
+
+---
+
+## 17. Backend-to-UI Interface Contract
+
+### Design Principle
+
+The Databricks App should **never execute comparison logic**. It should:
+1. **Read results** from Delta tables (Gold layer)
+2. **Trigger jobs** via Databricks Jobs API (for ad-hoc re-runs)
+3. **Update resolution status** via SQL connector (user actions)
+4. **Query historical data** for AI agent analysis
+
+### API Contract: App ↔ Backend
+
+#### A. Results Reading (App → Delta)
+
+```python
+# Connection: databricks-sql-connector (lightweight, no Spark needed)
+from databricks import sql
+
+class ResultsService:
+    """Reads reconciliation results from Delta tables.
+    Replaces in-memory DiffService for the viewer mode."""
+    
+    def __init__(self, sql_warehouse_path: str):
+        self.warehouse_path = sql_warehouse_path
+    
+    def get_latest_run(self, mode: str = "SKB") -> dict:
+        """Get metadata for the most recent completed run."""
+        sql = f"""
+            SELECT * FROM data_mesh_hub.rdm.reconciliation_runs
+            WHERE mode = '{mode}' AND status = 'completed'
+            ORDER BY run_timestamp DESC LIMIT 1
+        """
+        return self._query(sql)
+    
+    def get_results_page(self, run_id: str, dtype: str = None, 
+                         offset: int = 0, limit: int = 250) -> dict:
+        """Paginated results for a specific run."""
+        where = f"WHERE run_id = '{run_id}'"
+        if dtype:
+            where += f" AND dtype = '{dtype}'"
+        sql = f"""
+            SELECT * FROM data_mesh_hub.rdm.reconciliation_results
+            {where}
+            ORDER BY key_value
+            OFFSET {offset} LIMIT {limit}
+        """
+        return self._query(sql)
+    
+    def get_field_summary(self, run_id: str) -> dict:
+        """Per-field conflict statistics for a run."""
+        sql = f"""
+            SELECT * FROM data_mesh_hub.rdm.reconciliation_summary
+            WHERE run_id = '{run_id}'
+            ORDER BY conflict_count DESC
+        """
+        return self._query(sql)
+    
+    def get_run_history(self, mode: str = "SKB", limit: int = 30) -> list:
+        """Run history for trend analysis."""
+        sql = f"""
+            SELECT run_id, run_timestamp, status, total_keys,
+                   conflict_keys, match_percentage, trigger_type
+            FROM data_mesh_hub.rdm.reconciliation_runs
+            WHERE mode = '{mode}'
+            ORDER BY run_timestamp DESC LIMIT {limit}
+        """
+        return self._query(sql)
+```
+
+#### B. Job Triggering (App → Jobs API)
+
+```python
+from databricks.sdk import WorkspaceClient
+
+class JobTriggerService:
+    """Triggers reconciliation jobs from the app UI."""
+    
+    def trigger_comparison(self, mode: str = "SKB", 
+                           triggered_by: str = "user") -> dict:
+        """Trigger ad-hoc reconciliation run."""
+        w = WorkspaceClient()
+        run = w.jobs.run_now(
+            job_id=JOB_ID,  # configured via env var
+            notebook_params={
+                "mode": mode,
+                "trigger_type": "manual",
+                "triggered_by": triggered_by
+            }
+        )
+        return {"run_id": run.run_id, "status": "triggered"}
+    
+    def get_run_status(self, run_id: int) -> dict:
+        """Poll job run status."""
+        w = WorkspaceClient()
+        run = w.jobs.get_run(run_id)
+        return {"status": run.state.life_cycle_state, 
+                "result": run.state.result_state}
+```
+
+#### C. User Actions (App → Delta Updates)
+
+```python
+class ResolutionService:
+    """Handles user resolution actions on conflicts."""
+    
+    def update_resolution(self, run_id: str, key_value: str, 
+                          field: str, status: str, user: str) -> dict:
+        """User marks a conflict as acknowledged/escalated/resolved."""
+        sql = f"""
+            UPDATE data_mesh_hub.rdm.reconciliation_results
+            SET resolution_status = '{status}',
+                resolved_by = '{user}',
+                resolved_at = CURRENT_TIMESTAMP()
+            WHERE run_id = '{run_id}' 
+              AND key_value = '{key_value}'
+              AND field_canonical = '{field}'
+        """
+        return self._execute(sql)
+```
+
+### App Mode Architecture (Revised)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    DATABRICKS APP (Phase 2)                          │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                    MODE SELECTOR                              │   │
+│  │  [📊 View Results]  [🔄 Trigger Run]  [📤 Ad-hoc Upload*]  │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                                                                     │
+│  Mode A: Results Viewer                                             │
+│  ├── ResultsService (SQL connector → Delta)                        │
+│  ├── Run selector dropdown (from reconciliation_runs)              │
+│  ├── Paginated results grid                                        │
+│  ├── Field summary chart                                           │
+│  ├── Resolution actions (Update Delta)                             │
+│  └── AI Agent (queries Delta via SQL endpoint)                     │
+│                                                                     │
+│  Mode B: Job Trigger                                                │
+│  ├── JobTriggerService (Databricks SDK → Jobs API)                 │
+│  ├── Mode selector (SKA/SKB)                                       │
+│  ├── Real-time status polling                                      │
+│  └── Auto-switch to Results Viewer on completion                   │
+│                                                                     │
+│  Mode C: Ad-hoc Upload (LEGACY — retained for edge cases)          │
+│  ├── FileService (unchanged — manual upload)                       │
+│  ├── DiffService (unchanged — pandas comparison)                   │
+│  └── ⚠️ Results NOT persisted to Delta (session-only)              │
+│                                                                     │
+│  * Ad-hoc Upload retained for:                                      │
+│    - Testing new mappings before production                         │
+│    - One-off comparisons with custom/external files                 │
+│    - UAT validation                                                 │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+### UI ↔ Backend Contract Summary
+
+| UI Action | Backend Service | Data Flow | Latency |
+|-----------|----------------|-----------|---------|
+| Load latest results | `ResultsService.get_latest_run()` | App → SQL Endpoint → Delta | ~200ms |
+| Page through results | `ResultsService.get_results_page()` | App → SQL Endpoint → Delta | ~100ms |
+| View field stats | `ResultsService.get_field_summary()` | App → SQL Endpoint → Delta | ~100ms |
+| Trigger new run | `JobTriggerService.trigger_comparison()` | App → Jobs API → Job Cluster → Delta | ~5 min |
+| Resolve conflict | `ResolutionService.update_resolution()` | App → SQL Connector → Delta | ~300ms |
+| AI Agent query | `LLMService` + SQL endpoint | App → LLM → SQL → Delta → LLM → App | ~3 sec |
+| Create Jira | `JiraService` (unchanged) | App → Jira REST API | ~2 sec |
+| Export results | SQL query → CSV/Excel generation | App → SQL → pandas → file | ~1 sec |
+
+### Required App Dependencies (New)
+
+```txt
+# requirements.txt additions for Phase 2
+databricks-sql-connector>=3.0.0   # Lightweight SQL access (no Spark needed)
+# Remove: no longer need openpyxl/pyxlsb for Mode A
+# Keep: for Mode C (ad-hoc upload legacy)
+```
+
+---
+
+## 18. Revised Implementation Roadmap
+
+### Adjusted Based on Current State
+
+| Phase | What Exists | What's Needed |
+|-------|-------------|---------------|
+| Ingestion | ✅ SharePoint (Graph API), SAP (JSON), DataPool (partial) | Standardization to Bronze Delta |
+| Comparison | ⚠️ Pandas-based, session-bound | Full rewrite as Spark SQL/PySpark |
+| UI | ✅ Flask app with upload + compare + AI agent | Add Results Viewer mode + Job trigger |
+| Persistence | ❌ None (in-memory only) | Delta Gold tables |
+| Notifications | ❌ None | Email/Teams on threshold breach |
+
+### Revised Priority Order
+
+1. **Week 1-2: Delta Schema + Standardization Pipeline**
+   - Create `data_mesh_hub.rdm` schema
+   - Build `std_coa_excel_to_delta`, `std_sap_json_to_delta`, `std_datapool_to_delta`
+   - Build `normalize_to_silver` (apply mappings + transforms)
+   - Seed `field_mappings` and `transform_registry` config tables
+
+2. **Week 3-4: Spark Comparison Engine**
+   - Implement `SparkReconciler` class (or pure SQL notebook)
+   - Full outer join on canonical keys
+   - Column-expression-based conflict detection
+   - Write to `reconciliation_results` + `reconciliation_summary`
+   - Generate `reconciliation_runs` metadata
+
+3. **Week 5: Job Orchestration**
+   - Multi-task job: standardize → normalize → compare → notify
+   - Schedule daily (weekdays)
+   - Manual trigger support via job parameters
+
+4. **Week 6-7: App Integration**
+   - Add `ResultsService` (databricks-sql-connector)
+   - Add Results Viewer mode to UI
+   - Add Job Trigger button
+   - Swap AI agent backend from SQLite to SQL endpoint
+
+5. **Week 8: Notifications + Actions**
+   - Email/Teams notification on threshold breach
+   - Resolution tracking (user actions → Delta updates)
+   - Jira enhancements (run_id, de-duplication)
+
+### What Does NOT Need Building
+
+- ❌ Ingestion from SharePoint (already exists)
+- ❌ Ingestion from SAP (already exists)
+- ❌ App UI redesign (existing UI is good; just add a tab)
+- ❌ Jira integration (already works)
+- ❌ LLM agent tools (same tools, different backend)
+
+---
+
+## 19. Open Design Decisions (Updated)
+
+| # | Decision | Options | Recommendation |
+|---|----------|---------|----------------|
+| 1 | SQL vs PySpark for comparison | Pure SQL (simpler, Serverless) vs PySpark (more flexible) | **Pure SQL** — the comparison is joins + CASE WHEN; no complex logic needed |
+| 2 | Where do transforms live? | In SQL views (Silver layer) vs runtime Python UDFs | **SQL views** — deterministic, auditable, no UDF overhead |
+| 3 | How does app connect to Delta? | `databricks-sql-connector` vs Spark Connect | **SQL connector** — lighter, no Spark session in app process |
+| 4 | Keep ad-hoc upload mode? | Yes (legacy) vs No (force all through pipeline) | **Yes** — valuable for testing + UAT; label clearly as "not persisted" |
+| 5 | How to handle schema drift in sources? | Fail loud vs auto-adapt | **Fail loud** at Bronze → alert pipeline owner; don't silently lose columns |
+| 6 | Comparison output granularity | One row per key (wide) vs one row per key×field (long) | **Long format** — easier to query, filter, aggregate; matches `reconciliation_results` schema |
